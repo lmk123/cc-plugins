@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "lmk123",
+  "owner": {
+    "name": "lmk123",
+    "url": "https://github.com/lmk123"
+  },
+  "metadata": {
+    "description": "lmk123 自用的 Claude Code 插件市场",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "hello",
+      "source": "./plugins/hello",
+      "description": "示例插件：演示 command 与 skill 的基本结构",
+      "version": "0.1.0",
+      "category": "example"
+    }
+  ]
+}
