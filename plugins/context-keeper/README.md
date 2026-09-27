@@ -20,6 +20,6 @@
 
 monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.claude/`、`context/`，跨包内容放在仓库根。
 
-`.claude/` 只放 Claude Code 需要从那里加载的 rules 和 skills。decisions、data 这类沉淀文档放在 `context/`，因为 Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑。
+本插件只往 `.claude/` 里写 Claude Code 需要从那里加载的 rules 和 skills。decisions、data 这类沉淀文档放在 `context/`，因为 Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑。
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。

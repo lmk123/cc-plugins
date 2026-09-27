@@ -39,7 +39,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ## 阶段二：调研（两种模式都做）
 
-1. 找出仓库内所有 `CLAUDE.md` / `CLAUDE.local.md`，记录路径与行数。`CLAUDE.local.md` 是个人文件，只调研、只提建议，不迁移进仓库文件。
+1. 找出仓库内所有 `CLAUDE.md` / `CLAUDE.local.md`（包括 `.claude/CLAUDE.md`，它和同级的 `CLAUDE.md` 等价），记录路径与行数。`CLAUDE.local.md` 是个人文件，只调研、只提建议，不迁移进仓库文件。
 2. 检查根和每个包已有的 `.claude/rules/`、`.claude/skills/`、`.claude/commands/`、`.claude/agents/`、`context/decisions/`、`context/data/`；以及放错地方的沉淀文档，比如 `.claude/decisions/`、`.claude/data/`、`.claude/docs/` 这类不是 Claude Code 加载机制所需的目录。
 3. 把每个 CLAUDE.md **逐条**拆开（一条 = 一个独立语义单元，通常一行或一小节），按 layout.md 的判据阶梯打标签，并按归属判定确定作用域。
 4. 找**错位**和**重复**：
@@ -52,7 +52,12 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ### 要找什么
 
-用 grep 找**连续 5 行以上的注释块**，以及包含这类信号词的注释：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、数字加时间单位（正则如 `[0-9]+ ?(毫秒|秒|分钟|ms|s|min)([^A-Za-z]|$)`——不要用 `\b`，Grep 按 Unicode 判断词边界，`秒` 后面紧跟汉字时 `\b` 不成立，会漏掉「300秒左右」这类写法）、`基准`、`价格`、`旧版`。
+两类搜索都要做：
+
+1. **连续 5 行以上的注释块**。Grep 默认逐行匹配，找不到"连续多行"，必须开 `multiline: true`：
+   - 行注释：`(^[ \t]*(//|#|--|;).*\n){5,}`
+   - 块注释：`/\*[\s\S]*?\*/`，再只保留跨 5 行以上的命中
+2. **信号词**：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、`基准`、`价格`、`旧版`，以及数字加时间单位，正则如 `[0-9]+ ?(毫秒|秒|分钟|小时|天|ms|s|secs?|seconds?|min|mins|minutes?|h|hrs?|hours?|days?)([^A-Za-z]|$)`。不要用 `\b`：Grep 按 Unicode 判断词边界，`秒` 后面紧跟汉字时 `\b` 不成立，会漏掉「300秒左右」这类写法。
 
 命中之后逐段判断，用和 CLAUDE.md 相同的标签体系：
 
@@ -80,7 +85,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 1. **rule 的 `paths`**
    - 过宽：`**/*`、`src/**`、`packages/**` 这类一碰作用域就全中的
-   - 失效：用 Glob 实测，匹配不到任何现存文件的（通常是文件被移动或删除了）。**以 rule 所属作用域的根为基准**：包内 rule 把 Glob 的 path 设为该包目录，根 rule 设为仓库根；判定基准错位前也先按这个基准各测一次
+   - 失效：用 Glob 实测，匹配不到任何现存文件的（通常是文件被移动或删除了）。**以 rule 所属作用域的根为基准**：包内 rule 把 Glob 的 path 设为该包目录，根 rule 设为仓库根；判定基准错位前也先按这个基准各测一次。指向生成物或被 `.gitignore` 忽略的文件时按 layout.md「硬约束」的例外处理，不判失效
    - 基准错位：包内 rule 写成了从仓库根算起的路径，或根 rule 写成了包相对路径
    - 缺 `paths`：没有 frontmatter 的 rule 等于常驻，要么补 `paths`，要么说明它其实是 `ALWAYS`。frontmatter 前面有注释或空行、`---` 不在第一行的，同样按缺 `paths` 处理
 2. **CLAUDE.md 回胀**：出现多行条目、段落、带"因为/当初/以前"的解释、可以用 `paths` 限定的内容；「更多上下文」索引缺失或指向不存在的目录。
@@ -88,11 +93,11 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 4. **一事多处**：同一件事同时出现在 CLAUDE.md、rule、decision、代码注释中的两处以上。
 5. **rule 正文带"为什么"**：长篇原因应拆成 decision，rule 里留一行路径。
 6. **decision**：已被推翻但「状态」没改；引用了不存在的文件；文件名不是 `YYYY-MM-DD-<slug>.md`（比如旧的 `NNNN-` 递增编号）——建议重命名并同步更新所有指向它的引用，但重命名放进「需要拍板」，由用户决定。
-7. **data**：缺日期或测法；数值已被更新的实测推翻却没追加新行。
+7. **data**：缺日期或测法；数值已被更新的实测推翻却没追加新行。写着 `未记录` 的只在计划里提示，不要自行补填。
 8. **指针注释失效**：代码里 `原因见 <路径>` 这类指针指向的文件已不存在。
 9. **skill description 模糊**：看不出"什么时候用"。
 10. **作用域错位**：monorepo 里只涉及一个包的内容放在了根，或跨包内容放在了某个包里。
-11. **沉淀文档放在 `.claude/` 里**：decisions、data 或其他沉淀类 md 放在了 `.claude/` 下，迁到所属作用域的 `context/`，并同步更新所有指向它们的指针注释、rule 里的路径和 CLAUDE.md 索引。
+11. **沉淀文档放在 `.claude/` 里**：decisions、data 或其他沉淀类 md 放在了 `.claude/` 下（Claude Code 自己的配置不算，见 layout.md「作用域」），迁到所属作用域的 `context/`，并同步更新所有指向它们的指针注释、rule 里的路径和 CLAUDE.md 索引。
 12. **空目录/空文件**。
 
 体检没发现问题的作用域，在计划里写一句"无需调整"即可，不要为了显得有产出而硬凑改动。
@@ -103,7 +108,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 ### 定位并读取
 
-1. 系统提示里已经给出自动记忆目录路径时直接用它——它已按所有 settings 作用域（含企业 policy 和命令行 `--settings`）解析过。没有给出时，按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json` 有没有 `autoMemoryDirectory`。企业 policy（可能来自 MDM 或控制台）和命令行 `--settings` 从会话内看不全，在计划里注明这一点；都没有就在 `~/.claude/projects/` 下找与本仓库对应的目录（名字由 git 仓库根路径派生）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
+1. 系统提示里已经给出自动记忆目录路径时直接用它——它已按所有 settings 作用域（含企业 policy 和命令行 `--settings`）解析过。没有给出时，按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json` 有没有 `autoMemoryDirectory`。企业 policy（可能来自 MDM 或控制台）和命令行 `--settings` 从会话内看不全，在计划里注明这一点；都没有就在 `~/.claude/projects/` 下找与本仓库对应的目录：名字由**主仓库**根路径派生，不是当前 worktree 的路径——用 `git rev-parse --path-format=absolute --git-common-dir` 取到 `.git` 目录，它的父目录才是主仓库根（在 worktree 里 `--show-toplevel` 返回的是 worktree 自己的路径，会找错）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
 2. 读 `MEMORY.md` 和该目录下**所有** topic 文件，记录每个文件的 `type` 和修改日期。
 
 ### 三道筛
@@ -154,6 +159,8 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 1. 先 `git status --untracked-files=no`，已跟踪文件有未提交改动就停下来告诉用户。未跟踪文件不拦，但计划要新建的路径若已被未跟踪文件占用，同样停下来。
 2. 按计划一次性做完所有作用域，不用每个包停下来等。用户否掉的块直接跳过。
 3. **只搬运，不改写。** 原文保留，只允许删掉纯废话的连接词。不要"顺手优化"措辞，不要合并写成两条的规则，不要补充原文没有的内容。有条件成立的记忆条目，正文第一行写明适用条件。
+   - 模板要求、但原文没有的字段（decision 的「背景」「放弃的方案」，data 的「测法」等），填 `未记录`，不要编造。「状态」填 `生效`，日期按 layout.md「硬约束」查。
+   - 例外只有计划里批准的去重上移：多处语义重复的条目在目标位置只保留一条原文（选措辞最完整的那条，不要改写成新句子），计划里列出被合并掉的各处原文。
 4. **改源码文件时只能增删注释行，一行可执行代码都不许动**，包括空行位置和格式化。不要顺手跑 formatter。
 5. 按模板在根 CLAUDE.md 末尾保留「更多上下文」索引；包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行指路。带参数只处理某个包时根 CLAUDE.md 只读：根索引需要补或改的，写进验收报告作为建议，不要动文件。
 6. 执行块 C 时：
@@ -169,7 +176,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 1. `git diff --stat`
 2. **内容守恒自检**：原文件（CLAUDE.md、注释、记忆）里每条被标为 `PATH-RULE` / `SKILL` / `DECISION` / `DATA` / 沉淀的内容，在新文件里都能找到吗？列出任何丢失的
 3. **源码零改动自检**：对所有被改过的源码文件跑 `git diff -U0 -- <文件>`，确认所有 `+`/`-` 行都是注释行。有任何非注释行变化就明确指出来——这是 bug，不是特性
-4. **paths 生效自检**：每个新建或修改的 rule，其 glob 以所属作用域根为基准至少匹配到一个现存文件
+4. **paths 生效自检**：每个新建或修改的 rule，其 glob 以所属作用域根为基准至少匹配到一个现存文件（生成物/被忽略文件按 layout.md「硬约束」的例外核对）
 5. 每个 CLAUDE.md 的新行数 vs 原行数
 6. 执行了块 C 时：记忆目录前后文件数与 `MEMORY.md` 行数、`ENV-BOUND` 保留条目数、备份目录路径
 7. 与计划的偏差（执行中改了主意的，说明改了什么、为什么）

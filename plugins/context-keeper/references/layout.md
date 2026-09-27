@@ -29,7 +29,8 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 **作用域**是一套 `CLAUDE.md` + `.claude/` + `context/` 的挂载点：
 
-- `.claude/` 只放 Claude Code 要从这里加载的东西：`rules/`、`skills/`
+- `.claude/` 只放 Claude Code 要从这里加载的东西。本规范往里写的只有 `rules/`、`skills/`；已有的 `.claude/CLAUDE.md`、`settings*.json`、`commands/`、`agents/`、hook 脚本等也属于 Claude Code 配置，原样保留，不要当成沉淀文档搬走
+- 项目根的 CLAUDE.md 可以是 `CLAUDE.md`，也可以是 `.claude/CLAUDE.md`，两者等价。本规范说的「根 CLAUDE.md」指实际存在的那个；两个都存在时，写进计划的「需要拍板」，由用户决定是否合并
 - `context/` 放沉淀文档：`decisions/`、`data/`。**不要放进 `.claude/`**——Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑，沉淀文档需要经常追加和修改
 
 | 形态 | 作用域 |
@@ -122,7 +123,7 @@ monorepo：
 ## 硬约束
 
 - **禁止 `@` import**，指路一律用自然语言。
-- **`paths` 要窄到能真正起过滤作用。** 不许写 `**/*`、`src/**`、`packages/**` 这种一碰作用域就全中的写法；glob 必须至少匹配到一个现存文件——校验时以 rule 所属作用域的根为基准（包内 rule 在包目录下跑 Glob，根 rule 在仓库根跑），否则包相对的 glob 会被误判为失效。
+- **`paths` 要窄到能真正起过滤作用。** 不许写 `**/*`、`src/**`、`packages/**` 这种一碰作用域就全中的写法；glob 必须至少匹配到一个现存文件——校验时以 rule 所属作用域的根为基准（包内 rule 在包目录下跑 Glob，根 rule 在仓库根跑），否则包相对的 glob 会被误判为失效。例外：glob 指向生成物或被 `.gitignore` 忽略的文件（如 `src/generated/`）时，干净 checkout 里可能不存在，Glob 也可能过滤掉它们；这时改为核对 glob 与生成脚本的输出路径或 `.gitignore` 条目一致，不判为失效。
 - **CLAUDE.md 一条一行。** 凡是能被 `paths` 限定触发条件的，一律走 rule；凡是带"因为/当初/以前"的，一律走 decision。rule 正文写"做什么"，不写"为什么"，为什么归 decision，正文里用一行路径指过去。
 - **一件事只写一处。** 同一件事散在两个文件里比记在一个长文件里更糟。
 - **CLAUDE.md 末尾的「更多上下文」索引**用自然语言写（格式见模板）。包/目录级 CLAUDE.md 有自己的 decisions/data 时，也在末尾加一行同样性质的指路。
