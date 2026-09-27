@@ -1,0 +1,12 @@
+{
+  "name": "context-keeper",
+  "version": "0.1.0",
+  "description": "整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，其余按需加载；兼容 monorepo 与单仓库",
+  "author": {
+    "name": "lmk123",
+    "url": "https://github.com/lmk123"
+  },
+  "repository": "https://github.com/lmk123/cc-plugins",
+  "license": "MIT",
+  "keywords": ["claude-md", "rules", "context", "memory", "monorepo"]
+}

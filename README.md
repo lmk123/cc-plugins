@@ -29,6 +29,7 @@ claude plugin marketplace update lmk123
 | 插件 | 说明 |
 | --- | --- |
 | [hello](plugins/hello) | 示例插件：演示 command 与 skill 的基本结构 |
+| [context-keeper](plugins/context-keeper) | 整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，其余按需加载；兼容 monorepo 与单仓库 |
 
 ## 目录结构
 
