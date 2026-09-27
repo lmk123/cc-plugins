@@ -1,6 +1,6 @@
 ---
 name: organize-context
-description: 把项目的 CLAUDE.md、.claude/rules、代码注释里的历史说明和 Claude 自动记忆整理成「常驻部分尽量小、其余按需加载」的 context-keeper 结构，兼容 monorepo 和单仓库。项目还没用这套结构时做迁移；已经在用时做一次体检，找出放错位置、paths 过宽或失效、重复、过时的内容并提出调整。当用户要求整理/重构/瘦身 CLAUDE.md、整理 rules、检查 .claude 或 context 结构、把记忆沉淀进项目时使用。
+description: 把 CLAUDE.md、rules、代码注释和自动记忆整理成常驻最小、按需加载的结构（兼容 monorepo），已采用的项目则做体检。用户要求整理/瘦身 CLAUDE.md、整理 rules、把记忆沉淀进项目时使用。
 argument-hint: "[可选：只处理的目录或包路径]"
 ---
 
@@ -11,7 +11,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 - `${CLAUDE_PLUGIN_ROOT}/references/layout.md`：加载机制、仓库形态与作用域、标签体系、判据阶梯、硬约束
 - `${CLAUDE_PLUGIN_ROOT}/references/templates.md`：rule / decision / data / skill / 索引小节模板
 
-规范里「加载机制」一节是已核实的事实，直接按此执行，不要质疑也不要去查证。
+规范里「加载机制」一节是已核实的事实，直接按此执行，不必去查证；实际行为与之矛盾时以观察为准，并在计划里指出。
 
 ## 工作方式
 
@@ -23,7 +23,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ## 范围
 
-- 只处理本仓库范围内的文件。忽略仓库之外的任何 CLAUDE.md（包括 `~/.claude/CLAUDE.md`），不要读父目录。例外只有阶段五要用到的两处：自动记忆目录，以及用来定位它的 `~/.claude/settings.json`（只读）。
+- 只处理本仓库范围内的文件。忽略仓库之外的任何 CLAUDE.md（包括 `~/.claude/CLAUDE.md`），不要读父目录。例外只有阶段五要用到的：自动记忆目录，以及用来定位它的 `~/.claude/settings.json`（只读）。
 - 排除 `node_modules`、`dist`、`build`、`.git`、各类缓存目录，以及 `.gitignore` 忽略的产物目录。
 - 调用时带了参数（`$ARGUMENTS`）就只处理该路径；它是某个包时，根 CLAUDE.md 只读不改，仅用于查重和判断上移候选。
 
@@ -52,7 +52,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ### 要找什么
 
-用 grep 找**连续 5 行以上的注释块**，以及包含这类信号词的注释：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、数字加时间单位（正则如 `[0-9]+ ?(ms|s|秒|毫秒)\b`）、`基准`、`价格`、`旧版`。
+用 grep 找**连续 5 行以上的注释块**，以及包含这类信号词的注释：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、数字加时间单位（正则如 `[0-9]+ ?(毫秒|秒|分钟|ms|s|min)([^A-Za-z]|$)`——不要用 `\b`，Grep 按 Unicode 判断词边界，`秒` 后面紧跟汉字时 `\b` 不成立，会漏掉「300秒左右」这类写法）、`基准`、`价格`、`旧版`。
 
 命中之后逐段判断，用和 CLAUDE.md 相同的标签体系：
 
@@ -103,7 +103,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 ### 定位并读取
 
-1. 按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json` 有没有 `autoMemoryDirectory`；都没有就在 `~/.claude/projects/` 下找与本仓库对应的目录（名字由仓库路径派生）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
+1. 系统提示里已经给出自动记忆目录路径时直接用它——它已按所有 settings 作用域（含企业 policy 和命令行 `--settings`）解析过。没有给出时，按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json` 有没有 `autoMemoryDirectory`。企业 policy（可能来自 MDM 或控制台）和命令行 `--settings` 从会话内看不全，在计划里注明这一点；都没有就在 `~/.claude/projects/` 下找与本仓库对应的目录（名字由 git 仓库根路径派生）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
 2. 读 `MEMORY.md` 和该目录下**所有** topic 文件，记录每个文件的 `type` 和修改日期。
 
 ### 三道筛
@@ -122,7 +122,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 ## 计划里必须包含
 
-计划按下面三块组织，**每一块都要能被用户整体否掉而不影响其他块**：
+计划按下面三块组织，**每一块都要能被用户整体否掉而不影响其他块**。查重可能让几块指向同一个目标文件（比如 CLAUDE.md 和代码注释讲的是同一条决策）：这种共享文件，每个引用它的块都要能独立创建——执行时存在就复用或追加，不存在就由当前块创建，只写本块需要的内容。不许让一个块的指针或索引依赖另一块才会新建的文件；计划里把共享的目标文件标出来。
 
 ### A. CLAUDE.md、.claude/ 与 context/ 结构
 
@@ -155,9 +155,9 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 2. 按计划一次性做完所有作用域，不用每个包停下来等。用户否掉的块直接跳过。
 3. **只搬运，不改写。** 原文保留，只允许删掉纯废话的连接词。不要"顺手优化"措辞，不要合并写成两条的规则，不要补充原文没有的内容。有条件成立的记忆条目，正文第一行写明适用条件。
 4. **改源码文件时只能增删注释行，一行可执行代码都不许动**，包括空行位置和格式化。不要顺手跑 formatter。
-5. 按模板在根 CLAUDE.md 末尾保留「更多上下文」索引；包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行指路。
+5. 按模板在根 CLAUDE.md 末尾保留「更多上下文」索引；包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行指路。带参数只处理某个包时根 CLAUDE.md 只读：根索引需要补或改的，写进验收报告作为建议，不要动文件。
 6. 执行块 C 时：
-   - **先备份**：把整个记忆目录复制到同级的 `memory.bak-<YYYYMMDD>/`，再动任何东西。
+   - **先备份**：把整个记忆目录复制到同级的 `memory.bak-<YYYYMMDD-HHMMSS>/`，再动任何东西。目标目录已存在就停下来告诉用户，不要覆盖或往里面嵌套复制。
    - 从 topic 文件里删掉已沉淀的条目和 `DERIVABLE` / `STALE` 条目，同步更新 `MEMORY.md` 索引。topic 文件被清空就删掉该文件，并从索引里移除对应行。所有 `ENV-BOUND` 条目原样保留。
 7. 不碰 `~/.claude/CLAUDE.md` 和任何 `settings.json`。
 8. 不要自动 commit。

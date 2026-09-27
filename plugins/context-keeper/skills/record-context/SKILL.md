@@ -1,6 +1,6 @@
 ---
 name: record-context
-description: 决定一条持久知识该写到哪里，并按 context-keeper 结构写入（兼容 monorepo 和单仓库）。在以下任一时刻使用：发现了下次还会重新踩的坑；确定了一个技术决定或放弃了某个方案；量到了值得留存的数字（耗时、benchmark、容量、价格）；总结出一套可复用的步骤；准备往 CLAUDE.md、rules 或代码注释里追加说明性内容；准备把项目相关的内容写进自动记忆；用户说"记一下""写下来""记住这个""沉淀一下""以后别再犯"。
+description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、decision、data 还是不进仓库，并按模板写入。想把项目知识写进 CLAUDE.md、rules、注释或记忆时，或用户说"记一下""沉淀一下"时使用。
 ---
 
 # 记录上下文
@@ -26,10 +26,10 @@ description: 决定一条持久知识该写到哪里，并按 context-keeper 结
 ## 然后判断：写到哪个作用域
 
 1. 按 layout.md「判断形态」确定是 monorepo 还是单仓库（不要凭印象，信号清单以那里为准）。
-2. **单仓库**：一律写进仓库根（rules / skills 进根 `.claude/`，decisions / data 进根 `context/`）。
+2. **单仓库**：rules / skills 进根 `.claude/`，decisions / data 进根 `context/`。
 3. **monorepo**：这条知识涉及的文件全在某个包内 → 写进该包；涉及两个及以上包 → 写进仓库根。
 
-decisions / data 放 `context/`，**不要放进 `.claude/`**——Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑。`.claude/` 只放 Claude Code 需要从那里加载的 rules 和 skills。
+decisions / data 放 `context/`，**不要放进 `.claude/`**（原因见 layout.md「作用域」）。目录级 CLAUDE.md 下不另建 `.claude/` 或 `context/`。
 
 ## 最后判断：写成什么
 
@@ -40,7 +40,7 @@ decisions / data 放 `context/`，**不要放进 `.claude/`**——Claude 偶尔
 3. 它是"为什么这么定"吗？→ `<作用域>/context/decisions/YYYY-MM-DD-<slug>.md`，日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）
 4. 它是数字吗？→ `<作用域>/context/data/<name>.md`，必须带日期和测法
 5. 它只在碰到某一类文件时才需要吗？→ `<作用域>/.claude/rules/<领域>/<name>.md`，`paths` 相对作用域根写
-6. 以上都不是，且任何任务都可能违反 → 全仓通用写根 `CLAUDE.md`，只对某包成立写该包 `CLAUDE.md`。写一行，别写一段
+6. 以上都不是，且任何任务都可能违反 → 全仓通用写根 `CLAUDE.md`；只在某包/某目录内成立、且其中任何任务都适用 → 写该包/该目录的 `CLAUDE.md`（单仓库同样适用目录级 CLAUDE.md）。写一行，别写一段
 
 `paths` 要窄到能真正起过滤作用：`src/**`、`**/*`、`packages/**` 这种等于没写。写完用 Glob 确认它至少匹配到一个现存文件，Glob 的 path 设为作用域根（包内 rule 就是包目录）。
 
