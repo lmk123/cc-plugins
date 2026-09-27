@@ -2,37 +2,38 @@
 
 ## rule
 
-包内 rule，glob 相对该包写：
+**frontmatter 的 `---` 必须是文件第一行**，前面不能有任何内容（包括注释和空行），否则 `paths` 不生效，rule 会变成常驻。下面每个示例上方标注的是文件路径，不是文件内容。
+
+包内 rule（只涉及这一个包），glob 相对该包写。文件 `apps/web/.claude/rules/styling/tokens.md`：
 
 ```markdown
-<!-- packages/schema/.claude/rules/db/sync-generated.md -->
 ---
 paths:
-  - "src/**/*.ts"
+  - "src/styles/tokens/*.css"
 ---
 
-改这里之后必须跑 `pnpm db:generate`，否则 apps/web 类型对不上但构建不报错。
+改这里的 token 后必须跑 `pnpm tokens:build`，否则 `src/styles/generated/` 不会更新，但页面不报错。
 ```
 
-根作用域的 rule（单仓库的所有 rule，或 monorepo 的跨包 rule），glob 从仓库根写完整路径：
+根作用域的 rule（单仓库的所有 rule，或 monorepo 的跨包 rule），glob 从仓库根写完整路径。文件 `.claude/rules/db/schema-web-sync.md`：
 
 ```markdown
-<!-- .claude/rules/db/schema-web-sync.md -->
 ---
 paths:
-  - "packages/schema/**/*.ts"
-  - "apps/web/src/generated/**"
+  - "packages/schema/src/tables/*.ts"
+  - "apps/web/src/generated/db/*.ts"
 ---
 
-改 schema 后必须重新生成 apps/web 的类型。原因见 context/decisions/2026-08-12-generated-types.md
+改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型。原因见 context/decisions/2026-08-12-generated-types.md
 ```
 
 `paths` 要窄到能真正起过滤作用。正文写"做什么"，"为什么"用一行路径指向 decision。
 
 ## decision
 
+文件 `context/decisions/2026-09-05-retry-count.md`：
+
 ```markdown
-<!-- context/decisions/2026-09-05-retry-count.md -->
 # 重试次数固定为 3
 
 状态：生效

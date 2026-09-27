@@ -9,7 +9,7 @@
 3. Skill（`.claude/skills/<name>/SKILL.md`）→ 根级的启动时只加载 description；**子包里的 `.claude/skills/` 也支持**，且整体懒加载（碰到该目录文件时才可用，重名时用 `apps/web:deploy` 这种目录限定名）。
 4. **子包里的 `.claude/rules/` 同样有效，且 `paths:` glob 相对该子包解析。** 例如 `apps/web/.claude/rules/styling.md` 里写 `src/**/*.css`，匹配的是 `apps/web/src/`。这一条官方文档没有写，但已实测确认，直接按此执行。
 5. **`@path/to/file` import 是 eager 的**，启动就展开进 context，完全不省 token。**禁止**用 `@` 引用来"拆分"。需要指路时用自然语言写一行索引，让未来的 Claude 自己去 read/grep。
-6. 自动记忆（auto memory）位置在 `~/.claude/projects/<project>/memory/`，不在项目仓库里。`<project>` 由 git 仓库派生，同一仓库的所有 worktree 共用一份。`MEMORY.md` 是索引，只有它的**前 200 行或前 25KB** 会在每次会话开始时进 context；旁边的 topic 文件带 YAML frontmatter，`type` 取值为 `user` / `feedback` / `project` / `reference`，不自动加载。若 `~/.claude/settings.json` 或项目 `.claude/settings.json` 设了 `autoMemoryDirectory`，以它为准。
+6. 自动记忆（auto memory）位置在 `~/.claude/projects/<project>/memory/`，不在项目仓库里。`<project>` 由 git 仓库派生，同一仓库的所有 worktree 共用一份。`MEMORY.md` 是索引，只有它的**前 200 行或前 25KB** 会在每次会话开始时进 context；旁边的 topic 文件带 YAML frontmatter，`type` 取值为 `user` / `feedback` / `project` / `reference`，不自动加载。若任一 settings 作用域设了 `autoMemoryDirectory`，以它为准：按优先级从高到低依次是企业 policy、命令行 `--settings`、`.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json`，取最先出现的那个。
 
 由此得出：**根 CLAUDE.md 和子目录/子包 CLAUDE.md 都要瘦**。根的因为常驻，子目录的因为触发即全量加载——一个 400 行的包级 CLAUDE.md，Claude 碰了包里任意一个文件就全进来，哪怕只有 30 行相关。
 
@@ -71,15 +71,15 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 ## 判据阶梯
 
-按顺序问，第一个"是"就停：
+按顺序问，第一个"是"就停。一条内容混着"做什么"和"为什么/数字"时先拆开，各自走阶梯——"做什么"的部分通常落到 `PATH-RULE` 或 `ALWAYS`，原因和数字落到 `DECISION` / `DATA`，rule 里留一行路径指过去：
 
 0. 它属于这个项目吗？个人偏好 → `PERSONAL`；换台机器就不成立 → `ENV-BOUND`
 1. 删掉这条，Claude 会不会犯错？不会 → `DERIVABLE`
 2. 能不能写成脚本自动校验？能 → `HOOK`
 3. 它有步骤、平时用不上吗？是 → `SKILL`
-4. 它的触发条件比"整个作用域"更窄吗？是 → `PATH-RULE`（这一步要严格，能提取的都提取）
-5. 它是"为什么这么定"吗？是 → `DECISION`
-6. 它是数字吗？是 → `DATA`
+4. 它是"为什么这么定"吗？是 → `DECISION`
+5. 它是数字吗？是 → `DATA`
+6. 它的触发条件比"整个作用域"更窄吗？是 → `PATH-RULE`（这一步要严格，能提取的都提取）
 7. 剩下的才是 `ALWAYS`，再按归属判定放进根或包/目录的 CLAUDE.md
 
 ## 目录结构
@@ -122,7 +122,7 @@ monorepo：
 ## 硬约束
 
 - **禁止 `@` import**，指路一律用自然语言。
-- **`paths` 要窄到能真正起过滤作用。** 不许写 `**/*`、`src/**`、`packages/**` 这种一碰作用域就全中的写法；glob 必须至少匹配到一个现存文件。
+- **`paths` 要窄到能真正起过滤作用。** 不许写 `**/*`、`src/**`、`packages/**` 这种一碰作用域就全中的写法；glob 必须至少匹配到一个现存文件——校验时以 rule 所属作用域的根为基准（包内 rule 在包目录下跑 Glob，根 rule 在仓库根跑），否则包相对的 glob 会被误判为失效。
 - **CLAUDE.md 一条一行。** 凡是能被 `paths` 限定触发条件的，一律走 rule；凡是带"因为/当初/以前"的，一律走 decision。rule 正文写"做什么"，不写"为什么"，为什么归 decision，正文里用一行路径指过去。
 - **一件事只写一处。** 同一件事散在两个文件里比记在一个长文件里更糟。
 - **CLAUDE.md 末尾的「更多上下文」索引**用自然语言写（格式见模板）。包/目录级 CLAUDE.md 有自己的 decisions/data 时，也在末尾加一行同样性质的指路。

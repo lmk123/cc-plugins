@@ -23,7 +23,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ## 范围
 
-- 只处理本仓库范围内的文件。忽略仓库之外的任何 CLAUDE.md（包括 `~/.claude/CLAUDE.md`），不要读父目录。唯一例外是阶段五的自动记忆目录。
+- 只处理本仓库范围内的文件。忽略仓库之外的任何 CLAUDE.md（包括 `~/.claude/CLAUDE.md`），不要读父目录。例外只有阶段五要用到的两处：自动记忆目录，以及用来定位它的 `~/.claude/settings.json`（只读）。
 - 排除 `node_modules`、`dist`、`build`、`.git`、各类缓存目录，以及 `.gitignore` 忽略的产物目录。
 - 调用时带了参数（`$ARGUMENTS`）就只处理该路径；它是某个包时，根 CLAUDE.md 只读不改，仅用于查重和判断上移候选。
 
@@ -52,12 +52,12 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ### 要找什么
 
-用 grep 找**连续 5 行以上的注释块**，以及包含这类信号词的注释：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、`ms`、`基准`、`价格`、`旧版`。
+用 grep 找**连续 5 行以上的注释块**，以及包含这类信号词的注释：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、数字加时间单位（正则如 `[0-9]+ ?(ms|s|秒|毫秒)\b`）、`基准`、`价格`、`旧版`。
 
 命中之后逐段判断，用和 CLAUDE.md 相同的标签体系：
 
 - 讲**这段代码在做什么/怎么用** → 留着，别动
-- 讲**改这个文件时必须注意什么**（"改这里要同步 X"、"这个顺序不能换，原因是 Y"） → `PATH-RULE`，glob 指向这个文件或它所在目录，放进该文件所属的作用域
+- 讲**改这个文件时必须注意什么**（"改这里要同步 X"、"这个顺序不能换，原因是 Y"） → `PATH-RULE`，glob 指向这个文件或它所在目录，放进该文件所属的作用域；带的原因超过一句就拆成 `DECISION`，rule 里留一行路径
 - 讲**为什么当初这么选、以前是什么方案、为什么放弃** → `DECISION`
 - **数字**（优化前后耗时、benchmark、价格变更历史、容量上限的实测值） → `DATA`
 - **流程**（"要重新生成这个文件，步骤是……"） → `SKILL`
@@ -80,9 +80,9 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 1. **rule 的 `paths`**
    - 过宽：`**/*`、`src/**`、`packages/**` 这类一碰作用域就全中的
-   - 失效：用 Glob 实测，匹配不到任何现存文件的（通常是文件被移动或删除了）
+   - 失效：用 Glob 实测，匹配不到任何现存文件的（通常是文件被移动或删除了）。**以 rule 所属作用域的根为基准**：包内 rule 把 Glob 的 path 设为该包目录，根 rule 设为仓库根；判定基准错位前也先按这个基准各测一次
    - 基准错位：包内 rule 写成了从仓库根算起的路径，或根 rule 写成了包相对路径
-   - 缺 `paths`：没有 frontmatter 的 rule 等于常驻，要么补 `paths`，要么说明它其实是 `ALWAYS`
+   - 缺 `paths`：没有 frontmatter 的 rule 等于常驻，要么补 `paths`，要么说明它其实是 `ALWAYS`。frontmatter 前面有注释或空行、`---` 不在第一行的，同样按缺 `paths` 处理
 2. **CLAUDE.md 回胀**：出现多行条目、段落、带"因为/当初/以前"的解释、可以用 `paths` 限定的内容；「更多上下文」索引缺失或指向不存在的目录。
 3. **`@` import**：任何 CLAUDE.md 或 rule 里出现 `@path` 引用。
 4. **一事多处**：同一件事同时出现在 CLAUDE.md、rule、decision、代码注释中的两处以上。
@@ -103,7 +103,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 ### 定位并读取
 
-1. 先看 `~/.claude/settings.json` 和 `./.claude/settings.json` 有没有 `autoMemoryDirectory`；没有就在 `~/.claude/projects/` 下找与本仓库对应的目录（名字由仓库路径派生）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
+1. 按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json` 有没有 `autoMemoryDirectory`；都没有就在 `~/.claude/projects/` 下找与本仓库对应的目录（名字由仓库路径派生）。**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段。
 2. 读 `MEMORY.md` 和该目录下**所有** topic 文件，记录每个文件的 `type` 和修改日期。
 
 ### 三道筛
@@ -151,7 +151,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 
 ## 批准后执行
 
-1. 先 `git status`，工作区不干净就停下来告诉用户。
+1. 先 `git status --untracked-files=no`，已跟踪文件有未提交改动就停下来告诉用户。未跟踪文件不拦，但计划要新建的路径若已被未跟踪文件占用，同样停下来。
 2. 按计划一次性做完所有作用域，不用每个包停下来等。用户否掉的块直接跳过。
 3. **只搬运，不改写。** 原文保留，只允许删掉纯废话的连接词。不要"顺手优化"措辞，不要合并写成两条的规则，不要补充原文没有的内容。有条件成立的记忆条目，正文第一行写明适用条件。
 4. **改源码文件时只能增删注释行，一行可执行代码都不许动**，包括空行位置和格式化。不要顺手跑 formatter。
@@ -169,7 +169,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 1. `git diff --stat`
 2. **内容守恒自检**：原文件（CLAUDE.md、注释、记忆）里每条被标为 `PATH-RULE` / `SKILL` / `DECISION` / `DATA` / 沉淀的内容，在新文件里都能找到吗？列出任何丢失的
 3. **源码零改动自检**：对所有被改过的源码文件跑 `git diff -U0 -- <文件>`，确认所有 `+`/`-` 行都是注释行。有任何非注释行变化就明确指出来——这是 bug，不是特性
-4. **paths 生效自检**：每个新建或修改的 rule，其 glob 至少匹配到一个现存文件
+4. **paths 生效自检**：每个新建或修改的 rule，其 glob 以所属作用域根为基准至少匹配到一个现存文件
 5. 每个 CLAUDE.md 的新行数 vs 原行数
 6. 执行了块 C 时：记忆目录前后文件数与 `MEMORY.md` 行数、`ENV-BOUND` 保留条目数、备份目录路径
 7. 与计划的偏差（执行中改了主意的，说明改了什么、为什么）

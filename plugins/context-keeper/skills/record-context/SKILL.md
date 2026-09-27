@@ -25,7 +25,7 @@ description: 决定一条持久知识该写到哪里，并按 context-keeper 结
 
 ## 然后判断：写到哪个作用域
 
-1. 仓库根有 `pnpm-workspace.yaml`、`package.json` 的 `workspaces`、`lerna.json`、`nx.json`、`turbo.json`、`Cargo.toml [workspace]`、`go.work` 等 → monorepo；否则单仓库。判断细则见 layout.md。
+1. 按 layout.md「判断形态」确定是 monorepo 还是单仓库（不要凭印象，信号清单以那里为准）。
 2. **单仓库**：一律写进仓库根（rules / skills 进根 `.claude/`，decisions / data 进根 `context/`）。
 3. **monorepo**：这条知识涉及的文件全在某个包内 → 写进该包；涉及两个及以上包 → 写进仓库根。
 
@@ -33,16 +33,16 @@ decisions / data 放 `context/`，**不要放进 `.claude/`**——Claude 偶尔
 
 ## 最后判断：写成什么
 
-按顺序问，第一个"是"就停：
+按顺序问，第一个"是"就停。一条内容混着"做什么"和"为什么/数字"时先拆开各自判断，rule 里留一行路径指向 decision / data：
 
 1. 能不能写成脚本自动校验（lint / CI / hook）？能 → **建议用户加检查，不要写成文字**
 2. 它有步骤、平时用不上吗？→ `<作用域>/.claude/skills/<name>/SKILL.md`
-3. 它只在碰到某一类文件时才需要吗？→ `<作用域>/.claude/rules/<领域>/<name>.md`，`paths` 相对作用域根写
-4. 它是"为什么这么定"吗？→ `<作用域>/context/decisions/YYYY-MM-DD-<slug>.md`，日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）
-5. 它是数字吗？→ `<作用域>/context/data/<name>.md`，必须带日期和测法
+3. 它是"为什么这么定"吗？→ `<作用域>/context/decisions/YYYY-MM-DD-<slug>.md`，日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）
+4. 它是数字吗？→ `<作用域>/context/data/<name>.md`，必须带日期和测法
+5. 它只在碰到某一类文件时才需要吗？→ `<作用域>/.claude/rules/<领域>/<name>.md`，`paths` 相对作用域根写
 6. 以上都不是，且任何任务都可能违反 → 全仓通用写根 `CLAUDE.md`，只对某包成立写该包 `CLAUDE.md`。写一行，别写一段
 
-`paths` 要窄到能真正起过滤作用：`src/**`、`**/*`、`packages/**` 这种等于没写。写完用 Glob 确认它至少匹配到一个现存文件。
+`paths` 要窄到能真正起过滤作用：`src/**`、`**/*`、`packages/**` 这种等于没写。写完用 Glob 确认它至少匹配到一个现存文件，Glob 的 path 设为作用域根（包内 rule 就是包目录）。
 
 ## 写之前必须先查重
 
