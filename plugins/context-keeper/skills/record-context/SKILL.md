@@ -1,11 +1,11 @@
 ---
 name: record-context
-description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、decision、data 还是不进仓库，并按模板写入。想把项目知识写进 CLAUDE.md、rules、注释或记忆时，或用户说"记一下""沉淀一下"时使用。
+description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、decision、data 还是不进仓库，并按模板写入。想把项目知识写进 CLAUDE.md、rules 或注释时，或用户说"记一下""沉淀一下"时使用；个人偏好和对 Claude 的纠正直接写自动记忆，不用本 skill。
 ---
 
 # 记录上下文
 
-规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的部分；要新建 rule / decision / data / skill 文件时，先读模板。
+规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的摘要，与 layout.md 不一致时以 layout.md 为准；要新建 rule / decision / data / skill 文件时，先读模板。
 
 ## 先判断：这值得记吗
 
@@ -21,7 +21,7 @@ description: 决定一条持久知识（踩过的坑、技术决定、实测数�
 - **个人偏好、对你的纠正、个人工作习惯** → 不进项目仓库。交给自动记忆；如果用户想让它对所有项目生效，给出一行可粘贴到 `~/.claude/CLAUDE.md` 的文本，**不要直接改那个文件**。
 - **换台电脑、换个网络就不成立的**（本机路径、本机版本、端口占用、代理/网络问题、凭据） → 留在自动记忆，不进项目仓库。
 - **有条件成立的**（"仅 macOS""Node 20 以下"） → 属于项目，正文第一行写明适用条件。
-- 含 token、密码、内网地址、含用户名的绝对路径的 → 一律不写进项目仓库。
+- 含敏感信息的（清单见 layout.md「敏感信息」：API key、token、密码、私有仓库地址、内网地址、含用户名的绝对路径等） → 一律不写进项目仓库。
 
 ## 然后判断：写到哪个作用域
 
