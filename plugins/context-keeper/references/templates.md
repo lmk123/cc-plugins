@@ -69,10 +69,10 @@ paths:
 ```markdown
 ---
 name: release
-description: 发布 apps/web 到生产环境。当用户要求发布、上线、打 tag 时使用。
+description: 发布到生产环境。当用户要求发布、上线、打 tag 时使用。
 ---
 
-# 发布 apps/web
+# 发布
 
 1. <步骤>
 2. <步骤>
@@ -91,7 +91,7 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 - 各包和各模块的专属约定会按路径自动加载，不用手动查
 ```
 
-单仓库去掉"各包"的说法。包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行：
+单仓库去掉"各包"的说法。索引里只列根作用域的 skill：包内 skill 要碰到该包的文件后才可用，名字也带目录前缀（如 `apps/web:release`），写进根索引会指向一个调不到的命令。包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行：
 
 ```markdown
 本包的历史决策在 `apps/web/context/decisions/`，实测数据在 `apps/web/context/data/`。

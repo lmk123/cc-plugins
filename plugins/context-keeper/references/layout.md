@@ -9,7 +9,7 @@
 3. Skill（`.claude/skills/<name>/SKILL.md`）→ 根级的启动时只加载 description；**子包里的 `.claude/skills/` 也支持**，且整体懒加载（碰到该目录文件时才可用，重名时用 `apps/web:deploy` 这种目录限定名）。
 4. **子包里的 `.claude/rules/` 同样有效，且 `paths:` glob 相对该子包解析。** 例如 `apps/web/.claude/rules/styling.md` 里写 `src/**/*.css`，匹配的是 `apps/web/src/`。这一条官方文档没有写，但已实测确认，直接按此执行。
 5. **`@path/to/file` import 是 eager 的**，启动就展开进 context，完全不省 token。**禁止**用 `@` 引用来"拆分"。需要指路时用自然语言写一行索引，让未来的 Claude 自己去 read/grep。
-6. 自动记忆（auto memory）位置在 `~/.claude/projects/<project>/memory/`，不在项目仓库里。`<project>` 由 git 仓库派生，同一仓库的所有 worktree 共用一份。`MEMORY.md` 是索引，只有它的**前 200 行或前 25KB** 会在每次会话开始时进 context；旁边的 topic 文件带 YAML frontmatter，`type` 取值为 `user` / `feedback` / `project` / `reference`，不自动加载。若任一 settings 作用域设了 `autoMemoryDirectory`，以它为准：按优先级从高到低依次是企业 policy、命令行 `--settings`、`.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json`，取最先出现的那个。
+6. 自动记忆（auto memory）位置在 `~/.claude/projects/<project>/memory/`，不在项目仓库里。`<project>` 由 git 仓库派生，同一仓库的所有 worktree 和子目录共用一份；不在 git 仓库里时用项目根目录派生。目录名是该路径把所有非字母数字字符替换成 `-` 的结果（如 `/Users/a/my.app` → `-Users-a-my-app`），超过 200 字符时截断并追加哈希。设了环境变量 `CLAUDE_CONFIG_DIR` 时 `~/.claude` 换成它；同时设了 `CLAUDE_CODE_PROJECT_DIR_NAME` 时，`<project>` 直接用这个名字。`MEMORY.md` 是索引，只有它的**前 200 行或前 25KB** 会在每次会话开始时进 context；旁边的 topic 文件带 YAML frontmatter，`type` 取值为 `user` / `feedback` / `project` / `reference`，不自动加载。若任一 settings 作用域设了 `autoMemoryDirectory`，以它为准：按优先级从高到低依次是企业 policy、命令行 `--settings`、`.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json`，取最先出现的那个。
 
 由此得出：**根 CLAUDE.md 和子目录/子包 CLAUDE.md 都要瘦**。根的因为常驻，子目录的因为触发即全量加载——一个 400 行的包级 CLAUDE.md，Claude 碰了包里任意一个文件就全进来，哪怕只有 30 行相关。
 
@@ -53,7 +53,7 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 | 标签 | 判据 | 去处 |
 |---|---|---|
 | `ALWAYS` | 任何任务都可能违反的硬约束（commit 规则、语言/风格约定、绝对禁止做的事） | 全仓通用 → 根 `CLAUDE.md`；只在某包/某目录内成立且其中**任何任务都适用** → 该包/该目录的 `CLAUDE.md`。一条写一行 |
-| `HOOK` | 能被脚本/lint/CI 确定性校验的（commit message 格式、禁改文件、必须跑的检查） | 建议改成 hook 或 lint 配置，从 prose 里删掉。**只提建议，不要自己改 CI** |
+| `HOOK` | 能被脚本/lint/CI 确定性校验的（commit message 格式、禁改文件、必须跑的检查） | 建议改成 hook 或 lint 配置。**只提建议，不要自己改 CI**。检查落地之前文字不删，继续按判据阶梯归类放好；用户确认检查已经加上后，才从 prose 里删掉 |
 | `PATH-RULE` | 触发条件比"整个作用域"更窄——只在碰到特定文件、目录或文件类型时才需要知道的（"改 A 必须同步 B"、某个模块的坑、某类文件的专属约定） | `<作用域>/.claude/rules/<领域>/<name>.md`，`paths` 相对作用域根写；跨包联动规则放根，glob 写从仓库根算起的完整路径 |
 | `SKILL` | 有步骤的流程性知识（发布、迁移、排障 playbook），平时不需要 | `<作用域>/.claude/skills/<name>/SKILL.md` |
 | `DECISION` | 历史决策、"为什么现在是这样"、曾经的方案与放弃原因 | `<作用域>/context/decisions/YYYY-MM-DD-<slug>.md`，一决策一文件 |
@@ -65,7 +65,7 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 | 标签 | 判据 | 去处 |
 |---|---|---|
-| `PERSONAL` | 用户个人的偏好、对 Claude 的纠正、个人工作习惯 | 用户级 `~/.claude/CLAUDE.md`。**只给出可粘贴的文本，不许直接改那个文件**——它对用户所有项目生效。仓库可能被别人看到，写进项目是污染 |
+| `PERSONAL` | 用户个人的偏好、对 Claude 的纠正、个人工作习惯 | 留在自动记忆里，不进仓库——仓库可能被别人看到，写进项目是污染。用户希望对所有项目生效时，给出可粘贴到用户级 `~/.claude/CLAUDE.md` 的文本，**不许直接改那个文件** |
 | `ENV-BOUND` | 换一台电脑、换一个网络、换一个操作系统就不成立的：本机绝对路径、本机装的版本、端口占用、代理/DNS/网络限制、只在某台机器上出现的怪现象、任何凭据或 token | 留在自动记忆里，不进仓库 |
 
 有条件成立的环境相关内容（"在 macOS 上 X 会失败"、"Node 20 以下会报 Y"）不算 `ENV-BOUND`——换台同类环境照样遇到，按上表正常归类，但**正文第一行写明适用条件**（如"仅 macOS："）。
@@ -80,7 +80,7 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 0. 它属于这个项目吗？个人偏好 → `PERSONAL`；换台机器就不成立 → `ENV-BOUND`
 1. 删掉这条，Claude 会不会犯错？不会 → `DERIVABLE`
-2. 能不能写成脚本自动校验？能 → `HOOK`
+2. 能不能写成脚本自动校验？能 → 同时打上 `HOOK`，但**不停**，继续往下问，定出检查落地之前文字放在哪
 3. 它有步骤、平时用不上吗？是 → `SKILL`
 4. 它是"为什么这么定"吗？是 → `DECISION`
 5. 它是数字吗？是 → `DATA`
