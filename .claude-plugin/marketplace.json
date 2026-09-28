@@ -11,13 +11,6 @@
   },
   "plugins": [
     {
-      "name": "hello",
-      "source": "./plugins/hello",
-      "description": "示例插件：演示 command 与 skill 的基本结构",
-      "version": "0.1.0",
-      "category": "example"
-    },
-    {
       "name": "context-keeper",
       "source": "./plugins/context-keeper",
       "description": "整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，其余按需加载；兼容 monorepo 与单仓库",

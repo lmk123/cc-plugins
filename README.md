@@ -13,10 +13,10 @@ claude plugin marketplace add lmk123/cc-plugins
 安装插件：
 
 ```bash
-claude plugin install hello@lmk123
+claude plugin install context-keeper@lmk123
 ```
 
-或在 Claude Code 交互界面中使用 `/plugin marketplace add lmk123/cc-plugins` 和 `/plugin install hello@lmk123`。
+或在 Claude Code 交互界面中使用 `/plugin marketplace add lmk123/cc-plugins` 和 `/plugin install context-keeper@lmk123`。
 
 更新市场：
 
@@ -28,7 +28,6 @@ claude plugin marketplace update lmk123
 
 | 插件 | 说明 |
 | --- | --- |
-| [hello](plugins/hello) | 示例插件：演示 command 与 skill 的基本结构 |
 | [context-keeper](plugins/context-keeper) | 整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，其余按需加载；兼容 monorepo 与单仓库 |
 
 ## 目录结构
@@ -54,7 +53,7 @@ claude plugin marketplace update lmk123
 ## 新增插件
 
 1. 在 `plugins/` 下新建目录，例如 `plugins/my-plugin/`。
-2. 创建 `plugins/my-plugin/.claude-plugin/plugin.json`（可参考 [hello](plugins/hello/.claude-plugin/plugin.json)）。
+2. 创建 `plugins/my-plugin/.claude-plugin/plugin.json`（可参考 [context-keeper](plugins/context-keeper/.claude-plugin/plugin.json)）。
 3. 按需添加 `commands/`、`agents/`、`skills/`、`hooks/` 等组件。
 4. 在 [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) 的 `plugins` 数组中登记该插件。
 5. 校验：
