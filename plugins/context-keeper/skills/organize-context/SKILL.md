@@ -23,7 +23,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 - 只处理本仓库范围内的文件。忽略仓库之外的任何 CLAUDE.md（包括 `~/.claude/CLAUDE.md`），不要读父目录。例外只有阶段五要用到的：自动记忆目录，以及用来定位它的 `~/.claude/settings.json`（只读）。
 - 排除 `node_modules`、`dist`、`build`、`.git`、各类缓存目录，以及 `.gitignore` 忽略的产物目录。
-- 调用时带了参数（`$ARGUMENTS`）就只处理该路径下的 CLAUDE.md 和代码注释：
+- 调用时带了参数（`$ARGUMENTS`）就只处理该路径下的内容：CLAUDE.md、代码注释，以及体检对象——参数是包时为该包的 `.claude/`、`context/`；参数是普通目录时为所属作用域里 `paths` 指向该目录内的 rule，以及它们指向的 decision / data：
   - 参数是某个包：只写该包的作用域。根 CLAUDE.md、根 `.claude/`、根 `context/` 只读，仅用于查重；上移到根的候选只写进计划作为建议，不执行。
   - 参数是普通目录（单仓库的子目录、或包内的子目录）：拆出来的 rule / decision / data 按 layout.md 写进所属作用域的 `.claude/`、`context/`，这是允许的写入目标；所属作用域的 CLAUDE.md 只读。
   - 阶段五只沉淀归属于参数范围内的记忆条目；其余条目在计划里列一句"不在本次范围"，不沉淀，也不从记忆里删。
@@ -41,11 +41,11 @@ argument-hint: "[可选：只处理的目录或包路径]"
 ## 阶段二：调研（两种模式都做）
 
 1. 找出仓库内所有 `CLAUDE.md` / `CLAUDE.local.md`（包括 `.claude/CLAUDE.md`，它和同级的 `CLAUDE.md` 等价），记录路径与行数。`CLAUDE.local.md` 是个人文件，只调研、只提建议，不迁移进仓库文件。
-2. 检查根和每个包已有的 `.claude/rules/`、`.claude/skills/`、`.claude/commands/`、`.claude/agents/`、`context/decisions/`、`context/data/`；以及放错地方的沉淀文档，比如 `.claude/decisions/`、`.claude/data/`、`.claude/docs/` 这类不是 Claude Code 加载机制所需的目录。
-3. 把每个 CLAUDE.md **逐条**拆开（一条 = 一个独立语义单元，通常一行或一小节），按 layout.md 的判据阶梯打标签，并按归属判定确定作用域。
+2. 检查根和每个包已有的 `.claude/rules/`、`.claude/skills/`、`.claude/commands/`、`.claude/agents/`、`context/decisions/`、`context/data/`；以及放错地方的沉淀文档，比如 `.claude/decisions/`、`.claude/data/`、`.claude/docs/` 这类不是 Claude Code 加载机制所需的目录。这两类在迁移模式下同样要处理：已有的 rule 按阶段四第 1 项检查 `paths`，放错地方的沉淀文档按阶段四第 11 项迁走。
+3. 把每个 CLAUDE.md，以及缺 `paths`（等于常驻）的已有 rule，**逐条**拆开（一条 = 一个独立语义单元，通常一行或一小节），按 layout.md 的判据阶梯打标签，并按归属判定确定作用域。
 4. 找**错位**和**重复**：
    - monorepo：在 2 个及以上包里语义重复的规则 → 上移到根的候选；根里其实只对某个包成立的 → 下沉候选；包里其实全仓通用的 → 上移候选。
-   - 单仓库：目录级 CLAUDE.md 里其实全仓通用的 → 上移候选；根里其实只对某个目录成立的 → 下沉为 rule 或目录级 CLAUDE.md 的候选。
+   - 单仓库：目录级 CLAUDE.md 里其实全仓通用的 → 上移候选；根里其实只对某个目录成立的 → 下沉为 rule 的候选；该目录已有目录级 CLAUDE.md、且这条适用于其中任何任务时，下沉进那个 CLAUDE.md。
 
 ## 阶段三：代码注释
 
@@ -56,10 +56,10 @@ argument-hint: "[可选：只处理的目录或包路径]"
 两类搜索都要做：
 
 1. **连续 5 行以上的注释块**。Grep 默认逐行匹配，找不到"连续多行"，必须开 `multiline: true`。multiline 模式下 `.` 也匹配换行，所以正则里一律用 `[^\n]*`，不要用 `.*`，否则会跨过中间的代码把零散的单行注释连成一块：
-   - 行注释：`(^[ \t]*(//|#|--|;)[^\n]*\n){5,}`。`#` 开头的不一定是注释：预处理指令（`#include`、`#define`、`#pragma`）、shebang（`#!`）、Rust 属性（`#[...]`）命中后剔除。`--` 开头的也不一定是注释：CSS/SCSS/Less 里的自定义属性声明（`--color-primary: ...;`）命中后剔除
+   - 行注释：`(^[ \t]*(//|#|--|;)[^\n]*\n([ \t]*\n)?){5,}`。每行注释后允许夹一个空行，这样用空行分段的长注释不会被拆成几个短块漏掉；命中后确认连起来的确实是同一段注释，而不是被空行隔开的两段不相关注释。`#` 开头的不一定是注释：预处理指令（`#include`、`#define`、`#pragma`）、shebang（`#!`）、Rust 属性（`#[...]`）命中后剔除。`--` 开头的也不一定是注释：CSS/SCSS/Less 里的自定义属性声明（`--color-primary: ...;`）命中后剔除
    - 块注释：`/\*[\s\S]*?\*/`，再只保留跨 5 行以上的命中。`/*` 也可能出现在字符串里（如 glob `'src/**/*.ts'`），命中的起点不在注释位置的剔除
    - HTML 类注释（`.html`、`.vue`、`.svelte`、`.astro`、`.xml` 等）：`<!--[\s\S]*?-->`，同样只保留跨 5 行以上的命中
-2. **信号词**：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`WHY`、`NOTE`、`HACK`、`性能`、`快了`、`基准`、`价格`、`旧版`，以及数字加时间单位 `[0-9]+ ?(毫秒|秒|分钟|小时|天|ms|s|secs?|seconds?|min|mins|minutes?|h|hrs?|hours?|days?)([^A-Za-z]|$)`。**只在注释里找**，否则 CSS 的 `0.3s`、界面文案里的「注意」、`NOTE_TYPE` 这类标识符会淹没真正的命中：把上面的词或正则接在注释前缀后面，如 `(//|#|/\*|^[ \t]*\*|--|<!--)[^\n]*(为什么|以前|注意)`，命中后仍要确认确实在注释里（URL 里的 `//`、CSS 变量的 `--` 也会命中）。不要用 `\b`：Grep 按 Unicode 判断词边界，`秒` 后面紧跟汉字时 `\b` 不成立，会漏掉「300秒左右」这类写法。
+2. **信号词**：`为什么`、`以前`、`曾经`、`原本`、`历史`、`改成`、`不要改`、`注意`、`坑`、`性能`、`快了`、`基准`、`价格`、`旧版`，英文的 `why`、`note`、`hack`、`because`、`previously`、`used to`、`legacy`、`workaround`、`benchmark`、`faster`、`slower`、`do not change`、`don't change`（英文词大小写不敏感，Grep 开 `-i`），以及数字加时间单位 `[0-9]+ ?(毫秒|秒|分钟|小时|天|ms|s|secs?|seconds?|min|mins|minutes?|h|hrs?|hours?|days?)([^A-Za-z]|$)`。**只在注释里找**，否则 CSS 的 `0.3s`、界面文案里的「注意」、`NOTE_TYPE` 这类标识符会淹没真正的命中：把上面的词或正则接在注释前缀后面，如 `(//|#|/\*|^[ \t]*\*|--|<!--)[^\n]*(为什么|以前|注意)`，命中后仍要确认确实在注释里（URL 里的 `//`、CSS 变量的 `--` 也会命中）。不要用 `\b`：Grep 按 Unicode 判断词边界，`秒` 后面紧跟汉字时 `\b` 不成立，会漏掉「300秒左右」这类写法。
 
 命中之后逐段判断，用和 CLAUDE.md 相同的标签体系：
 
@@ -113,8 +113,9 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 1. 系统提示里已经给出自动记忆目录路径时直接用它——它已按所有 settings 作用域（含企业 policy 和命令行 `--settings`）和环境变量解析过。没有给出时按下面的顺序找，**找不到就在计划里说明并跳过本阶段**，不要猜，也不要因此中断其他阶段：
    - **`autoMemoryDirectory`**：按 layout.md「加载机制」第 6 条的优先级，依次看 `.claude/settings.local.json`、`.claude/settings.json`、`~/.claude/settings.json`。企业 policy（可能来自 MDM 或控制台）和命令行 `--settings` 从会话内看不全，在计划里注明这一点。
    - **配置目录**：`echo "$CLAUDE_CONFIG_DIR"` 非空就用它代替 `~/.claude`；同时 `CLAUDE_CODE_PROJECT_DIR_NAME` 非空时，`<project>` 直接用这个名字，不用推导。
-   - **推导 `<project>`**：先确定源路径。git 仓库里用**主仓库**根路径，不是当前 worktree 的路径——用 `git rev-parse --path-format=absolute --git-common-dir` 取共享的 git 目录，它以 `/.git` 结尾时，父目录才是主仓库根（在 worktree 里 `--show-toplevel` 返回的是 worktree 自己的路径，会找错）；不以 `/.git` 结尾的（bare 仓库 + worktree、submodule 等）不要推导父目录，在计划里列出 `<配置目录>/projects/` 下看起来对应的目录名供用户确认。不在 git 仓库里（`git rev-parse` 报错）时，源路径是项目根目录。再按 layout.md「加载机制」第 6 条的规则把源路径编码成目录名，并用 `ls` 确认目录存在；超过 200 字符被截断加哈希的，按前缀在 `<配置目录>/projects/` 下找。
+   - **推导 `<project>`**：先确定源路径。git 仓库里用**主仓库**根路径，不是当前 worktree 的路径——用 `git rev-parse --path-format=absolute --git-common-dir` 取共享的 git 目录（git 2.31 以下不认 `--path-format`，报 unknown option 时改用 `git rev-parse --git-common-dir`，它可能返回相对当前目录的路径，自己拼成绝对路径），它以 `/.git` 结尾时，父目录才是主仓库根（在 worktree 里 `--show-toplevel` 返回的是 worktree 自己的路径，会找错）；不以 `/.git` 结尾的（bare 仓库 + worktree、submodule 等）不要推导父目录，在计划里列出 `<配置目录>/projects/` 下看起来对应的目录名供用户确认。不在 git 仓库里（`git rev-parse --is-inside-work-tree` 报 `not a git repository`；其他报错不算，停下来查原因）时，源路径是项目根目录。再按 layout.md「加载机制」第 6 条的规则把源路径编码成目录名，并用 `ls` 确认目录存在；超过 200 字符被截断加哈希的，按前缀在 `<配置目录>/projects/` 下找。
 2. 读 `MEMORY.md` 和该目录下**所有** topic 文件，记录每个文件的 `type` 和修改日期。
+3. 找出**已沉淀**的条目：内容已经出现在默认分支（`git symbolic-ref refs/remotes/origin/HEAD` 指向的分支，取不到就用 `main` / `master`，都没有就写进「需要拍板」）已提交的文件里（用 `git grep -F <关键词> <默认分支>` 查）。这些是以前沉淀、现已合并的，可以从记忆里删，不再走三道筛。
 
 ### 三道筛
 
@@ -153,7 +154,7 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 - 逐条分类表：原文摘要（≤25 字）、来源文件、环境相关性判定、标签、目标路径、理由（≤15 字）
 - 建议去 `~/.claude/CLAUDE.md` 的条目，给出可直接粘贴的文本
 - 敏感信息命中（只列类型和位置）
-- 建议从记忆里删除的条目（`DERIVABLE` / `STALE` / 已沉淀的）
+- 建议从记忆里删除的条目（`DERIVABLE` / `STALE` / 已合并进默认分支的已沉淀条目）；本次新沉淀的条目单独列为「合并后再删」
 
 ### 需要拍板
 
@@ -168,11 +169,11 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
    - 模板要求、但原文没有的字段（decision 的「背景」「放弃的方案」，data 的「测法」等），填 `未记录`，不要编造。「状态」填 `生效`，日期按 layout.md「硬约束」查。
    - 例外只有计划里批准的去重上移：多处语义重复的条目在目标位置只保留一条原文（选措辞最完整的那条，不要改写成新句子），计划里列出被合并掉的各处原文。
 4. **改源码文件时只能增删注释行，一行可执行代码都不许动**，包括格式化。不要顺手跑 formatter。空行只有一种情况可以动：整段注释搬走后上下留下了连续空行，删掉多出来的，只留一行，免得 lint 报连续空行。
-5. 按模板在根 CLAUDE.md 末尾保留「更多上下文」索引；包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行指路。带参数时，按「范围」一节只读的 CLAUDE.md 不动：索引需要补或改的，写进验收报告作为建议。
+5. 按模板在根 CLAUDE.md 末尾保留「更多上下文」索引；包/目录级 CLAUDE.md 有自己的 decisions/data 时，末尾加一行指路。索引和指路行属于块 A：块 A 被否掉时任何 CLAUDE.md 都不动；带参数时，按「范围」一节只读的 CLAUDE.md 也不动。这两种情况下索引需要补或改的，写进验收报告作为建议。
 6. 执行块 C 时，按下面的顺序做：
    - **先备份**：把整个记忆目录复制到同级的 `memory.bak-<YYYYMMDD-HHMMSS>/`，再动任何东西。目标目录已存在就停下来告诉用户，不要覆盖或往里面嵌套复制。
    - **再写入**：把要沉淀的条目写进目标文件，逐条确认已落盘。
-   - **最后删除**：只删已确认写入成功的条目，以及 `DERIVABLE` / `STALE` 条目；执行中途停下的，没写成功的条目留在记忆里不删。同步更新 `MEMORY.md` 索引，topic 文件被清空就删掉该文件，并从索引里移除对应行。所有 `ENV-BOUND` 条目原样保留。
+   - **最后删除**：本次只删 `DERIVABLE` / `STALE` 条目，以及阶段五找出的、已合并进默认分支的已沉淀条目。**刚沉淀的条目本次不删**：自动记忆由同一仓库的所有 worktree 共用，而沉淀内容此刻只在当前 worktree 的未提交改动里，现在删会让其他 worktree 和默认分支立刻丢失这些知识，分支被放弃时就只剩备份。验收报告里列出这些条目，告诉用户改动合并进默认分支后再跑一次本 skill 清理。同步更新 `MEMORY.md` 索引，topic 文件被清空就删掉该文件，并从索引里移除对应行。所有 `ENV-BOUND` 条目原样保留。
 7. 不碰 `~/.claude/CLAUDE.md` 和任何 `settings.json`。
 8. 不要自动 commit。
 
@@ -185,5 +186,5 @@ license header、JSDoc/TSDoc/docstring 等 API 文档注释、`eslint-disable` /
 3. **源码零改动自检**：对所有被改过的源码文件跑 `git diff -U0 -- <文件>`，确认所有 `+`/`-` 行都是注释行（或第 4 步允许删的多余空行）。有任何其他变化就明确指出来——这是 bug，不是特性
 4. **paths 生效自检**：每个新建或修改的 rule，其 glob 以所属作用域根为基准至少匹配到一个现存文件（生成物/被忽略文件按 layout.md「硬约束」的例外核对）
 5. 每个 CLAUDE.md 的新行数 vs 原行数
-6. 执行了块 C 时：记忆目录前后文件数与 `MEMORY.md` 行数、`ENV-BOUND` 保留条目数、备份目录路径
+6. 执行了块 C 时：记忆目录前后文件数与 `MEMORY.md` 行数、`ENV-BOUND` 保留条目数、备份目录路径，以及「合并后再删」的条目清单
 7. 与计划的偏差（执行中改了主意的，说明改了什么、为什么）
