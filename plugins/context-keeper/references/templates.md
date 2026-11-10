@@ -24,10 +24,10 @@ paths:
   - "apps/web/src/generated/db/*.ts"
 ---
 
-改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型。原因见 context/2026-08-12-generated-types.md
+改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型。原因见 .context/2026-08-12-generated-types.md
 ```
 
-正文写"做什么"，"为什么"用一行路径指向文档。`paths` 的写法要求见 layout.md「硬约束」。
+正文写"做什么"；原因一句话能说完的直接跟在后面（如第一个示例），说不完的用一行路径指向文档（如第二个示例）。`paths` 的写法和原因放哪的规则见 layout.md「硬约束」。
 
 ## 文档
 
@@ -36,7 +36,7 @@ paths:
 - 第一行是标题，说清这份文档讲的是什么主题，方便以后 grep 和判断要不要读
 - 写的是现状，不是流水账：不按日期追加段落，情况变了就原地改（见 layout.md「硬约束」）
 - 有条件成立的内容，在对应段落开头写明适用条件（如"仅 macOS："）
-- 记数字时带上**日期**和**测法**，否则半年后没人知道它还成不成立；迁移来的数字原文没写的标 `未记录`，不要编造。同一指标的多次实测用表格，新值追加一行，不覆盖旧值：
+- 记数字的要求见 layout.md「硬约束」的「实测数字」。同一指标的多次实测用这样的表格：
 
   ```markdown
   | 日期 | 改动 | 数值 | 测法 |
@@ -45,7 +45,7 @@ paths:
   | 2026-09-20 | 引入路由级懒加载后 | 1.1s | Lighthouse 移动端 |
   ```
 
-示例，文件 `apps/web/context/api/2026-09-05-retry-policy.md`（文件名和领域目录的规则见 layout.md「硬约束」）：
+示例，文件 `apps/web/.context/api/2026-09-05-retry-policy.md`（文件名和领域目录的规则见 layout.md「硬约束」）：
 
 ```markdown
 # 请求重试策略
@@ -79,35 +79,25 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 
 ```markdown
 ## 更多上下文
-- 项目文档：`context/` 和各包的 `context/`，按领域分目录（动手前先看对应领域，再 grep 一遍相关主题）
+- 项目文档：`.context/` 和各包的 `.context/`，按领域分目录（动手前先看对应领域，再 grep 一遍相关主题；点开头的目录有些工具默认跳过，grep 时显式传路径）
 - 发布流程：用 `/release`
 - 各包和各模块的专属约定会按路径自动加载，不用手动查
 ```
 
-单仓库去掉"各包"的说法。索引里只列根作用域的 skill：包内 skill 要碰到该包的文件后才可用，名字也带目录前缀（如 `apps/web:release`），写进根索引会指向一个调不到的命令。包级 CLAUDE.md 所在的包有自己的 `context/` 时，末尾加一行：
+单仓库去掉"各包"的说法。索引里只列根作用域的 skill：包内 skill 要碰到该包的文件后才可用，名字也带目录前缀（如 `apps/web:release`），写进根索引会指向一个调不到的命令。包级 CLAUDE.md 所在的包有自己的 `.context/` 时，末尾加一行：
 
 ```markdown
-本包的文档在 `apps/web/context/`。
+本包的文档在 `apps/web/.context/`。
 ```
 
-另选了文档目录的作用域（见 layout.md「作用域」），索引或指路行写实际目录，并注明 `context/` 不是文档目录，例如：
+用户选择暂时保留旧版插件的 `context/decisions/`、`context/data/`（见 layout.md「硬约束」）时，在同一行后面注明，供以后的体检和记录识别。根索引：
 
 ```markdown
-- 项目文档：`docs/context/`，按领域分目录（根下的 `context/` 是代码，不是文档）
-```
-
-```markdown
-本包的文档在 `apps/web/docs/context/`（`apps/web/context/` 是代码，不是文档）。
-```
-
-用户选择保留旧结构的类型目录（怎么认见 layout.md「硬约束」）时，在同一行后面注明，供以后的体检和记录识别。根索引：
-
-```markdown
-- 项目文档：`context/`，按领域分目录（`decisions/`、`data/` 是旧结构，按用户决定保留，新文档不放进去）
+- 项目文档：`.context/` 和各包的 `.context/`，按领域分目录（`context/decisions/`、`context/data/` 是旧版结构，按用户决定暂时保留，新文档不放进去）
 ```
 
 包的指路行：
 
 ```markdown
-本包的文档在 `apps/web/context/`（`decisions/` 是旧结构，按用户决定保留，新文档不放进去）。
+本包的文档在 `apps/web/.context/`（`apps/web/context/decisions/` 是旧版结构，按用户决定暂时保留，新文档不放进去）。
 ```
