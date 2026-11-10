@@ -24,6 +24,30 @@ claude plugin install context-keeper@lmk123
 claude plugin marketplace update lmk123
 ```
 
+### 在项目中共享插件
+
+以项目范围（`--scope project`）安装插件时，Claude Code 只会往项目的 `.claude/settings.json` 写入 `enabledPlugins`，不会记录市场来源。换一台没添加过本市场的电脑打开项目，Claude Code 不认识 `lmk123`，会直接跳过这些插件，也不会提示安装。
+
+要让其他电脑（或其他协作者）打开项目时自动提示安装，需要在 `.claude/settings.json` 里手动补上 `extraKnownMarketplaces`：
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "lmk123": {
+      "source": {
+        "source": "github",
+        "repo": "lmk123/cc-plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "context-keeper@lmk123": true
+  }
+}
+```
+
+提交后，在新电脑上打开项目并信任该文件夹时，Claude Code 会先提示添加 `lmk123` 市场，再提示安装 `enabledPlugins` 中的插件。`extraKnownMarketplaces` 要在信任文件夹后才生效。
+
 ## 插件列表
 
 | 插件 | 说明 |
