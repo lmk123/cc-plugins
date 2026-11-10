@@ -41,7 +41,7 @@ description: 决定一条持久的项目知识（踩过的坑、技术决定的�
 
 - 单仓库：一律仓库根的 `.claude/`、`.context/`。
 - monorepo（判断信号见 layout.md「判断形态」）：涉及的文件全在某个包内 → 该包的 `.claude/`、`.context/`；涉及两个及以上包 → 仓库根。
-- `.context/` 被 `.gitignore` 忽略、或被别的用途占用时，停下来告诉用户。
+- 往 `.context/` 写之前先跑 `git check-ignore -q "<作用域>/.context/<领域>/<slug>.md"`（仓库根作用域就是 `.context/<领域>/<slug>.md`）：退出码为 0 表示会被 `.gitignore` 忽略，停下来告诉用户；`.context/` 已被别的用途占用（里面有被代码或工具读取的文件）时同样停下。
 
 **领域**（`<领域>`）取项目已有叫法：先看同作用域 `.claude/rules/` 下已有的领域目录名，其次用代码里的模块名、目录名，不自造。说不清属于哪块、或跨两块以上的文档放 `.context/` 顶层。第一份文档就放进领域目录。
 
@@ -86,7 +86,7 @@ description: 决定一条持久的项目知识（踩过的坑、技术决定的�
 
 ## 10. 写完之后
 
-1. 跑一次 `node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" <作用域路径>`，修掉本次引入的问题（`paths` 匹配不到、rule 过长、指针失效、孤儿文档、入口没被 CLAUDE.md 指到等）。之前就有的问题不在这次处理，提醒用户跑 organize-context。`node` 不可用就跳过。
+1. 跑一次 `node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" "<作用域路径>"`（仓库根作用域不传路径），修掉本次引入的问题（`paths` 匹配不到、rule 过长、指针失效、孤儿文档、入口没被 CLAUDE.md 指到等）。之前就有的问题不在这次处理，提醒用户跑 organize-context。`node` 不可用就跳过。
 2. 在回复末尾用一行告诉用户写到了哪些文件（含顺带改的入口、CLAUDE.md），例如：
 
    > 记了一条：`apps/web/.claude/rules/api/retry.md`

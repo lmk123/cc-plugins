@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { findCommentBlocks, findSignalComments, langFor } from './lib/comments.mjs';
+import { analyzeComments, langFor } from './lib/comments.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.includes('-h') || argv.includes('--help')) {
@@ -91,6 +91,17 @@ function ignored(paths) {
   return new Set(r.stdout.split('\0').filter(Boolean));
 }
 
+// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认围栏
+function proseLines(text, plain = false) {
+  const out = [];
+  let fence = false;
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!plain && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+    if (!fence) out.push([line, i]);
+  });
+  return out;
+}
+
 // ---------- 结果收集 ----------
 
 const findings = [];
@@ -133,19 +144,34 @@ function parseFrontmatter(text) {
   if (end === -1) return null;
   const fm = lines.slice(1, end);
   const unq = (s) => s.trim().replace(/^['"]|['"]$/g, '');
+  // YAML 行内注释：引号包起来的值取到配对的引号为止，否则去掉空白后面的 `#…`
+  const noComment = (s) => {
+    const t = s.trim();
+    const q = t.match(/^(["'])(.*?)\1/);
+    return q ? q[0] : t.replace(/\s+#.*$/, '').replace(/^#.*$/, '');
+  };
   const res = { paths: null, description: null, body: lines.slice(end + 1) };
   for (let i = 0; i < fm.length; i++) {
     const m = fm[i].match(/^(paths|description)\s*:\s*(.*)$/);
     if (!m) continue;
-    const [, key, rest] = m;
+    const [, key] = m;
+    const rest = noComment(m[2]);
     if (key === 'description') { res.description = unq(rest); continue; }
-    if (rest.trim().startsWith('[')) {
-      res.paths = splitTopLevel(rest.trim().replace(/^\[|\]$/g, '')).map(unq).filter(Boolean);
-    } else if (rest.trim()) {
+    if (rest.startsWith('[')) {
+      res.paths = splitTopLevel(rest.replace(/^\[|\]$/g, '')).map(unq).filter(Boolean);
+    } else if (rest) {
       res.paths = [unq(rest)];
     } else {
+      // 块列表：中间夹的空行和注释行跳过
       res.paths = [];
-      while (i + 1 < fm.length && /^\s*-\s+/.test(fm[i + 1])) res.paths.push(unq(fm[++i].replace(/^\s*-\s+/, '')));
+      while (i + 1 < fm.length) {
+        const next = fm[i + 1];
+        if (/^\s*(#.*)?$/.test(next)) { i++; continue; }
+        if (!/^\s*-\s+/.test(next)) break;
+        const item = unq(noComment(next.replace(/^\s*-\s+/, '')));
+        if (item) res.paths.push(item);
+        i++;
+      }
     }
   }
   return res;
@@ -276,12 +302,19 @@ for (const rule of rules) {
     else add('warn', 'rule', rule, '没有 paths，会常驻加载：补 paths，或说明它其实是 ALWAYS');
     continue;
   }
-  const globs = fm.paths ? expandPaths(fm.paths) : [];
-  if (!globs.length) {
+  // orig 是 paths 里按逗号切开后的一项，glob 是它展开花括号、去掉末尾 `/**` 后的结果
+  const pairs = (fm.paths || []).flatMap(splitTopLevel).flatMap((orig) => expandPaths([orig]).map((glob) => ({ orig, glob })));
+  if (!pairs.length) {
     add('warn', 'rule', rule, '没有 paths，会常驻加载：补 paths，或说明它其实是 ALWAYS');
     continue;
   }
-  if (globs.every((g) => g === '**')) {
+  // `!` 开头的是 gitignore 的否定模式，只用来排除，不单独要求匹配到文件
+  const positive = pairs.filter((p) => !p.glob.startsWith('!'));
+  if (!positive.length) {
+    add('error', 'rule', rule, 'paths 只有 `!` 开头的否定模式，匹配不到任何文件，这条 rule 永远不会加载');
+    continue;
+  }
+  if (positive.every((p) => p.glob === '**')) {
     add('warn', 'rule', rule, 'paths 只有 "**"，Claude Code 会当作没有 paths，常驻加载：写窄，或说明它其实是 ALWAYS');
     continue;
   }
@@ -290,8 +323,7 @@ for (const rule of rules) {
     add('warn', 'rule', rule, `正文 ${bodyLines} 行（上限 ${RULE_MAX_LINES}）：命中时整份加载。收窄 paths 拆成几条，或把长背景拆进 .context/ 文档、rule 留一行路径`);
   }
   const sf = scopeFiles(scope);
-  const pairs = fm.paths.flatMap(splitTopLevel).flatMap((orig) => expandPaths([orig]).map((glob) => ({ orig, glob })));
-  for (const { orig, glob } of pairs) {
+  for (const { orig, glob } of positive) {
     const label = orig === glob ? `"${glob}"` : `"${orig}"（展开后的 "${glob}"）`;
     let test;
     try {
@@ -343,10 +375,7 @@ for (const s of skills) {
 for (const f of [...claudeMds, ...rules]) {
   const text = read(f);
   if (text === null) continue;
-  let fence = false;
-  text.split(/\r?\n/).forEach((line, i) => {
-    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
-    if (fence) return;
+  for (const [line, i] of proseLines(text)) {
     const plain = line.replace(/`[^`]*`/g, '');
     // 只有目标文件真的存在才会被展开；`@types/node` 这类包名找不到文件，不算
     for (const m of plain.matchAll(/(?:^|\s)@([~./\w][^\s'")\]]*)/g)) {
@@ -359,7 +388,7 @@ for (const f of [...claudeMds, ...rules]) {
       try { isFile = fs.statSync(abs).isFile(); } catch {}
       if (isFile) add('error', 'import', f, `\`@${ref}\` 是 import，启动时会整份展开进 context；改成自然语言写路径`, i + 1);
     }
-  });
+  }
 }
 
 // ---------- CLAUDE.md ----------
@@ -371,14 +400,12 @@ for (const f of claudeMds) {
   const lines = text.split(/\r?\n/);
   // 以换行结尾时 split 会多出一个空串，和 wc -l 对齐
   claudeMdStats.push({ file: f, lines: text ? lines.length - (/\n$/.test(text) ? 1 : 0) : 0 });
-  let fence = false;
-  lines.forEach((line, i) => {
-    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+  for (const [line, i] of proseLines(text)) {
     // 指向文档入口的那一行是模板规定的索引行，不算带原因
-    if (!fence && !line.includes(ENTRY) && /(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
+    if (!line.includes(ENTRY) && /(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
       add('warn', 'claude-md', f, `疑似带原因：「${line.trim().slice(0, 60)}」——CLAUDE.md 只写做什么，原因拆出来：能挂到代码上的进 rule，挂不上的进 .context/ 文档`, i + 1);
     }
-  });
+  }
 }
 
 // ---------- 文档 ----------
@@ -403,16 +430,28 @@ for (const d of docs) {
 
 // ---------- .context/ 能否进 git ----------
 
+// 两路：一是磁盘上已经存在、但被忽略的 `.context/`（被忽略的文件不在 ls-files 里，上面的分类看不到它们）；
+// 二是还没建 `.context/` 的作用域，按根和已有 `.claude/` 的位置探一下写进去会不会被忽略。
+// 目录级 CLAUDE.md 所在目录不是作用域，不探。
+const ignoredScopes = new Set();
+if (IS_GIT) {
+  const r = git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']);
+  for (const p of r.stdout.split('\0').filter(Boolean)) {
+    const segs = p.replace(/\/$/, '').split('/');
+    const k = segs.indexOf('.context');
+    if (k !== -1) ignoredScopes.add(segs.slice(0, k).map((x) => `${x}/`).join(''));
+  }
+}
 const scopes = new Set(['']);
-for (const f of [...rules, ...docs, ...claudeMds, ...skills]) {
-  for (const marker of ['.claude/', '.context/', 'CLAUDE.md', 'CLAUDE.local.md']) {
+for (const f of [...rules, ...docs, ...skills]) {
+  for (const marker of ['.claude/', '.context/']) {
     const i = f.indexOf(marker);
     if (i !== -1 && (i === 0 || f[i - 1] === '/')) { scopes.add(f.slice(0, i)); break; }
   }
 }
 const PROBE = ['.context', '__probe__.md'].join('/'); // 拆开写，免得脚本复制进项目后把这里当成失效指针
-for (const p of ignored([...scopes].map((s) => s + PROBE))) {
-  const s = p.slice(0, -PROBE.length);
+for (const p of ignored([...scopes].map((s) => s + PROBE))) ignoredScopes.add(p.slice(0, -PROBE.length));
+for (const s of ignoredScopes) {
   add('error', 'context-dir', `${s}.context/`, '`.context/` 被 .gitignore 忽略了，文档进不了仓库：调整 .gitignore 后再往里写');
 }
 
@@ -451,11 +490,9 @@ for (const f of filesMentioningContext()) {
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
-  let fence = false;
-  text.split(/\r?\n/).forEach((line, i) => {
-    // Markdown 代码块里的是示例，不算指针
-    if (isMd && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
-    if (fence || !line.includes('.context/')) return;
+  // Markdown 代码块里的是示例，不算指针
+  for (const [line, i] of proseLines(text, !isMd)) {
+    if (!line.includes('.context/')) continue;
     const seen = new Set();
     for (const m of line.matchAll(POINTER_RE)) {
       const raw = m[1].replace(/^\.\//, '');
@@ -470,7 +507,7 @@ for (const f of filesMentioningContext()) {
         add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
     }
-  });
+  }
 }
 for (const d of docs) {
   if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回 rule，不能就登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
@@ -509,10 +546,10 @@ if (WANT_COMMENTS) {
     if (f.split('/').some((s) => SKIP_DIRS.has(s))) continue;
     const text = readRaw(f);
     if (!text) continue;
-    for (const b of findCommentBlocks(text, f)) {
+    const { blocks, signals: sig } = analyzeComments(text, f);
+    for (const b of blocks) {
       add('info', 'comment-block', f, `${b.lines} 行的注释块（第 ${b.start}–${b.end} 行）`, b.start);
     }
-    const sig = findSignalComments(text, f);
     if (sig.length) {
       const lines = sig.map((s) => s.line);
       add('info', 'comment-signal', f, `带信号词的注释 ${sig.length} 处：第 ${lines.slice(0, 15).join('、')}${lines.length > 15 ? ' …' : ''} 行`, lines[0]);
@@ -541,4 +578,5 @@ if (WANT_JSON) {
   if (findings.length) console.log('');
   console.log(`错误 ${counts.error}，警告 ${counts.warn}，提示 ${counts.info}`);
 }
-process.exit(counts.error ? 1 : 0);
+// 不用 process.exit：macOS 上 stdout 是管道时写入是异步的，直接退出会截断超过管道缓冲（64KB）的输出
+process.exitCode = counts.error ? 1 : 0;

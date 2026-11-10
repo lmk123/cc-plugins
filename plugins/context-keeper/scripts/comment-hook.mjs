@@ -6,6 +6,7 @@
 // "新写的行"优先取 tool_response.structuredPatch 里的 `+` 行；改个别词、整段挪位置或改缩进都不算新写。
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { findCommentBlocks } from './lib/comments.mjs';
 
 if (process.env.CONTEXT_KEEPER_COMMENT_HOOK === '0') process.exit(0);
@@ -22,7 +23,18 @@ const ti = input.tool_input || {};
 const resp = input.tool_response && typeof input.tool_response === 'object' ? input.tool_response : {};
 const file = ti.file_path;
 if (!file || !['Write', 'Edit', 'MultiEdit'].includes(tool)) process.exit(0);
-if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(file)) process.exit(0);
+// 跳过规则只看项目内的相对路径：worktree 在 <repo>/.claude/worktrees/<name>/ 下，拿绝对路径去比会把整个 worktree 都跳过。
+// 项目根取离文件最近的 .git（worktree 里是 .git 文件），找不到时用 hook 的 cwd
+function projectRelative(abs) {
+  for (let dir = path.dirname(abs); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.git'))) return path.relative(dir, abs);
+    if (path.dirname(dir) === dir) break;
+  }
+  const rel = input.cwd ? path.relative(input.cwd, abs) : abs;
+  return rel.startsWith('..') || path.isAbsolute(rel) ? path.basename(abs) : rel;
+}
+const rel = projectRelative(path.resolve(input.cwd || process.cwd(), file));
+if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(rel)) process.exit(0);
 
 // 统一成 \n，CRLF 文件里行号才对得上
 const lf = (s) => s.replace(/\r\n?/g, '\n');

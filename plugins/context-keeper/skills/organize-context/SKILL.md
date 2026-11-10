@@ -28,7 +28,7 @@ argument-hint: "[可选：只处理的目录或包路径]"
 
 ## 阶段一：跑检查脚本，判断形态和模式
 
-1. 跑 `node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" $ARGUMENTS --comments`。脚本输出是后面几个阶段的输入：rule、文档、指针、`@` import 这些机械问题以它为准，不用再手工逐条核对。`node` 不可用时在计划里注明，按 layout.md 手工检查。
+1. 跑 `node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" "<路径>" --comments`。`<路径>` 是从参数里取出的那一个仓库内路径（参数夹着说明文字的只取路径，拿不准取哪个就问用户），加引号传；没带参数就去掉 `"<路径>"`。脚本以退出码 2 报「路径不存在」「路径不在仓库内」时是路径传错了，改正后重跑，不要当成 `node` 不可用。脚本输出是后面几个阶段的输入：rule、文档、指针、`@` import 这些机械问题以它为准，不用再手工逐条核对。`node` 不可用时在计划里注明，按 layout.md 手工检查。
 2. **形态**：按 layout.md「判断形态」定 monorepo 还是单仓库，列出所有包。拿不准写进「需要拍板」，先按单仓库处理。
 3. **模式**，按作用域分别判断：
    - **迁移**：还没有这套结构（没有带 `paths` 的 rules、没有 `.context/`），CLAUDE.md 里混着各种内容。

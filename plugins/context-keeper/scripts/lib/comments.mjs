@@ -64,7 +64,9 @@ function commentBody(t, prefixes, idx) {
 }
 
 // 落在跨行字符串（Python 三引号、JS 模板字符串、Go 原始字符串等）里的行下标。
-// 只按分隔符粗略配对：整行是注释的行不参与配对，反斜杠转义下一个字符。
+// 只按分隔符粗略配对：整行是注释的行不参与配对，反斜杠转义下一个字符；
+// 跨行字符串外的单行字符串（'…'、"…"）整段跳过，碰到行尾注释就不再看这一行，
+// 连续两个以上的单字符分隔符（'```' 这类 Markdown 围栏）不算分隔符，免得把后面整份文件都当成字符串。
 function stringLines(lines, lang) {
   const inside = new Set();
   if (!lang.strings) return inside;
@@ -73,11 +75,27 @@ function stringLines(lines, lang) {
     if (open) inside.add(k);
     else if (commentBody(l.trimStart(), lang.line, k) !== null) return;
     for (let i = 0; i < l.length; i++) {
-      if (l[i] === '\\') { i++; continue; }
-      const d = open ? (l.startsWith(open, i) ? open : null) : lang.strings.find((x) => l.startsWith(x, i));
-      if (!d) continue;
-      open = open ? null : d;
-      i += d.length - 1;
+      const c = l[i];
+      if (c === '\\') { i++; continue; }
+      if (open) {
+        if (l.startsWith(open, i)) { i += open.length - 1; open = null; }
+        continue;
+      }
+      if (lang.line.some((p) => l.startsWith(p, i))) break;
+      const d = lang.strings.find((x) => l.startsWith(x, i));
+      if (d) {
+        let j = i;
+        if (d.length === 1) while (l[j] === d) j++;
+        if (j - i >= 2) { i = j - 1; continue; }
+        open = d;
+        i += d.length - 1;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        let j = i + 1;
+        while (j < l.length && l[j] !== c) j += l[j] === '\\' ? 2 : 1;
+        i = j;
+      }
     }
   });
   return inside;
@@ -113,16 +131,38 @@ function lineRuns(lines, lang, str) {
   return runs;
 }
 
-// 返回 [{ start, end, lines, text, kind }]，start/end 为 1 起的行号（相对 text）
-export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
+// 一份文本只切一次行、只算一次字符串范围和行注释分段，长注释块和信号词共用
+function prepare(text, file) {
   const lang = langFor(file);
-  if (!lang) return [];
+  if (!lang) return null;
   const lines = text.split(/\r?\n/);
   const str = stringLines(lines, lang);
+  return { lang, lines, str, runs: lineRuns(lines, lang, str) };
+}
+
+// 返回 [{ start, end, lines, text, kind }]，start/end 为 1 起的行号（相对 text）
+export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
+  const ctx = prepare(text, file);
+  return ctx ? blocksOf(ctx, minLines) : [];
+}
+
+// 带信号词的独立注释行（不含行尾注释），返回 [{ line, text }]
+export function findSignalComments(text, file) {
+  const ctx = prepare(text, file);
+  return ctx ? signalsOf(ctx) : [];
+}
+
+// 两样都要时用这个，省一遍分析
+export function analyzeComments(text, file) {
+  const ctx = prepare(text, file);
+  return ctx ? { blocks: blocksOf(ctx, MIN_BLOCK_LINES), signals: signalsOf(ctx) } : { blocks: [], signals: [] };
+}
+
+function blocksOf({ lang, lines, str, runs }, minLines) {
   const blocks = [];
 
   // 1. 连续的独立行注释
-  for (const run of lineRuns(lines, lang, str)) {
+  for (const run of runs) {
     if (run.doc) continue;
     const bodies = run.items.map((x) => x.body);
     const start = run.items[0].k;
@@ -162,13 +202,8 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   return blocks.sort((a, b) => a.start - b.start);
 }
 
-// 带信号词的独立注释行（不含行尾注释），返回 [{ line, text }]
-export function findSignalComments(text, file) {
-  const lang = langFor(file);
-  if (!lang) return [];
-  const lines = text.split(/\r?\n/);
-  const str = stringLines(lines, lang);
-  const docLines = new Set(lineRuns(lines, lang, str).filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
+function signalsOf({ lang, lines, str, runs }) {
+  const docLines = new Set(runs.filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
   const prefixes = [...lang.line];
   if (lang.block) prefixes.push('/*');
   if (lang.html) prefixes.push('<!--');
