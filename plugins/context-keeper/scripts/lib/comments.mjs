@@ -123,12 +123,29 @@ export function findSignalComments(text, file) {
   if (lang.block) prefixes.push('/*', '*');
   if (lang.html) prefixes.push('<!--');
   const out = [];
+  // 跟踪是否在 /* */ 里：JSDoc（/**）和 /*! 整块跳过；`* ` 开头的行只在块注释内才算注释
+  let block = null; // null | 'doc' | 'plain'
   text.split(/\r?\n/).forEach((l, idx) => {
     const t = l.trimStart();
-    const p = prefixes.find((x) => t.startsWith(x));
+    if (block) {
+      const inDoc = block === 'doc';
+      if (t.includes('*/')) block = null;
+      if (inDoc) return;
+      if (/^\*(\s|$)/.test(t) || !t.startsWith('*')) {
+        const body = t.replace(/^\*/, '');
+        if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
+      }
+      return;
+    }
+    if (lang.block && t.startsWith('/*')) {
+      const isDoc = t.startsWith('/**') || t.startsWith('/*!');
+      if (!t.includes('*/', 2)) block = isDoc ? 'doc' : 'plain';
+      if (isDoc) return;
+    }
+    const p = prefixes.find((x) => x !== '*' && t.startsWith(x));
     if (!p) return;
     if (p === '#' && /^#(!|\[|include|define|pragma)/.test(t)) return;
-    if (p === '*' && !/^\*(\s|$)/.test(t)) return;
+    if (p === '//' && /^\/\/[/!]/.test(t)) return; // /// 和 //! 是文档注释
     const body = t.slice(p.length);
     if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
   });

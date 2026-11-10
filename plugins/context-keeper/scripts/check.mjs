@@ -9,6 +9,7 @@
 // 有「错误」级问题时退出码为 1。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findCommentBlocks, findSignalComments, langFor } from './lib/comments.mjs';
@@ -59,6 +60,7 @@ let FILTER = '';
 if (target) {
   FILTER = path.relative(ROOT, path.resolve(process.cwd(), target)).split(path.sep).join('/');
   if (FILTER.startsWith('..')) { console.error(`路径不在仓库内：${target}`); process.exit(2); }
+  if (!fs.existsSync(path.join(ROOT, FILTER))) { console.error(`路径不存在：${target}`); process.exit(2); }
   if (FILTER && !FILTER.endsWith('/') && fs.statSync(path.join(ROOT, FILTER)).isDirectory()) FILTER += '/';
 }
 const inScope = (f) => !FILTER || f === FILTER || f.startsWith(FILTER);
@@ -133,7 +135,7 @@ function parseFrontmatter(text) {
     const [, key, rest] = m;
     if (key === 'description') { res.description = unq(rest); continue; }
     if (rest.trim().startsWith('[')) {
-      res.paths = rest.trim().replace(/^\[|\]$/g, '').split(',').map(unq).filter(Boolean);
+      res.paths = splitTopLevel(rest.trim().replace(/^\[|\]$/g, '')).map(unq).filter(Boolean);
     } else if (rest.trim()) {
       res.paths = [unq(rest)];
     } else {
@@ -145,11 +147,58 @@ function parseFrontmatter(text) {
 }
 
 // ---------- glob ----------
+// 对齐 Claude Code 的做法：paths 每项按花括号外的逗号切开、展开花括号、去掉末尾的 `/**`，
+// 再按 gitignore 语义匹配作用域根起的相对路径（ignore 包）。全部是 `**` 时视为没有 paths。
 
-function globToRegExp(glob) {
-  let g = glob.replace(/^\.\//, '');
-  if (g.endsWith('/')) g += '**';
-  const anyDepth = !g.includes('/');
+function splitTopLevel(s) {
+  const out = [];
+  let cur = '';
+  let depth = 0;
+  for (const c of s) {
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    if (c === ',' && depth <= 0) { out.push(cur); cur = ''; } else cur += c;
+  }
+  out.push(cur);
+  return out.map((x) => x.trim()).filter(Boolean);
+}
+
+function expandBraces(p, budget = { n: 1000 }) {
+  const m = p.match(/^([^{]*)\{([^}]+)\}(.*)$/);
+  if (!m) return [p];
+  const parts = m[2].split(',').map((x) => x.trim());
+  if ((budget.n -= parts.length) < 0) return [p];
+  return parts.flatMap((x) => expandBraces(m[1] + x + m[3], budget));
+}
+
+function expandPaths(items) {
+  return items
+    .flatMap(splitTopLevel)
+    .flatMap((p) => expandBraces(p))
+    .map((p) => (p.endsWith('/**') ? p.slice(0, -3) : p))
+    .filter(Boolean);
+}
+
+// gitignore 语义：不含 `/`（末尾的不算）的模式匹配任意深度；含 `/` 的相对作用域根锚定；
+// 匹配到某个目录，目录下所有文件都算匹配（所以 `src/*` 等于整个 src/）。正则不合法时抛错。
+function gitignoreMatcher(glob) {
+  let g = glob;
+  const dirOnly = g.endsWith('/');
+  g = g.replace(/\/+$/, '');
+  const anchored = g.includes('/');
+  g = g.replace(/^\//, '');
+  const re = new RegExp(`^${anchored ? '' : '(?:[^/]+/)*'}${globBody(g)}$`);
+  return (file) => {
+    const segs = file.split('/');
+    for (let i = 1; i <= segs.length; i++) {
+      if (dirOnly && i === segs.length) continue;
+      if (re.test(segs.slice(0, i).join('/'))) return true;
+    }
+    return false;
+  };
+}
+
+function globBody(g) {
   let re = '';
   let depth = 0;
   for (let i = 0; i < g.length;) {
@@ -178,18 +227,21 @@ function globToRegExp(glob) {
     re += c.replace(/[.+^$(){}|\\\]]/g, '\\$&');
     i++;
   }
-  return new RegExp(`^${anyDepth ? '(?:[^/]+/)*' : ''}${re}$`);
+  return re;
 }
 
 const staticPrefix = (glob) => {
-  const segs = glob.replace(/^\.\//, '').split('/');
+  const segs = glob.replace(/^\//, '').split('/');
   const idx = segs.findIndex((s) => /[*?{[]/.test(s));
   return segs.slice(0, idx === -1 ? segs.length : idx).join('/');
 };
 
+// 一碰就全中的写法：通配整个作用域，或通配 src/、packages/ 这类容器目录（`src/*` 按 gitignore 语义等于整个 src/）。
+// `api/**` 这种领域级目录不算，交给下面按匹配比例判断。
+const CONTAINER_DIRS = new Set(['src', 'lib', 'libs', 'app', 'apps', 'packages', 'modules', 'services', 'crates', 'pkg', 'internal', 'cmd', 'source', 'sources']);
 const isBroadPattern = (g) => {
-  const n = g.replace(/^\.\//, '');
-  return ['*', '**', '**/*', '**/*.*'].includes(n) || /^[^/*?{[]+\/\*\*(\/\*)?$/.test(n);
+  const n = g.replace(/^\//, '').replace(/\/+$/, '').replace(/(\/\*\*)*(\/\*)?$/, '');
+  return ['', '*', '**', '**/*', '**/*.*'].includes(n) || CONTAINER_DIRS.has(n);
 };
 
 // ---------- rules ----------
@@ -205,8 +257,13 @@ for (const rule of rules) {
     else add('warn', 'rule', rule, '没有 paths，会常驻加载：补 paths，或说明它其实是 ALWAYS');
     continue;
   }
-  if (!fm.paths || !fm.paths.length) {
+  const globs = fm.paths ? expandPaths(fm.paths) : [];
+  if (!globs.length) {
     add('warn', 'rule', rule, '没有 paths，会常驻加载：补 paths，或说明它其实是 ALWAYS');
+    continue;
+  }
+  if (globs.every((g) => g === '**')) {
+    add('warn', 'rule', rule, 'paths 只有 "**"，Claude Code 会当作没有 paths，常驻加载：写窄，或说明它其实是 ALWAYS');
     continue;
   }
   const bodyLines = fm.body.filter((l) => l.trim()).length;
@@ -214,26 +271,33 @@ for (const rule of rules) {
     add('warn', 'rule', rule, `正文 ${bodyLines} 行（上限 ${RULE_MAX_LINES}）：命中时整份加载。收窄 paths 拆成几条，或把长背景拆进 .context/ 文档、rule 留一行路径`);
   }
   const sf = scopeFiles(scope);
-  for (const glob of fm.paths) {
-    const re = globToRegExp(glob);
-    const matched = sf.filter((f) => re.test(f));
+  const pairs = fm.paths.flatMap(splitTopLevel).flatMap((orig) => expandPaths([orig]).map((glob) => ({ orig, glob })));
+  for (const { orig, glob } of pairs) {
+    const label = orig === glob ? `"${glob}"` : `"${orig}"（展开后的 "${glob}"）`;
+    let test;
+    try {
+      test = gitignoreMatcher(glob);
+    } catch {
+      add('error', 'rule', rule, `paths ${label} 不是合法的 glob（括号没配对？），Claude Code 会当它匹配不到任何文件`);
+      continue;
+    }
+    const matched = sf.filter(test);
     if (!matched.length) {
-      const bare = glob.replace(/^\.\//, '').replace(/\/$/, '');
-      if (scope && (glob.startsWith(scope) || glob.startsWith(`./${scope}`))) {
-        add('error', 'rule', rule, `paths "${glob}" 写成了从仓库根算起的路径；包内 rule 的 glob 相对 ${scope} 写`);
-      } else if (!/[*?{[]/.test(bare) && sf.some((f) => f.startsWith(`${bare}/`))) {
-        add('warn', 'rule', rule, `paths "${glob}" 是目录名，不一定能匹配到文件，建议写成 "${bare}/**"`);
+      if (glob.startsWith('./')) {
+        add('error', 'rule', rule, `paths ${label} 以 ./ 开头：Claude Code 按 gitignore 语义匹配，这样写匹配不到文件，去掉 ./`);
+      } else if (scope && glob.replace(/^\//, '').startsWith(scope)) {
+        add('error', 'rule', rule, `paths ${label} 写成了从仓库根算起的路径；包内 rule 的 glob 相对 ${scope} 写`);
       } else if (ignored([`${scope}${staticPrefix(glob) || '.'}/__probe__`]).size) {
-        add('warn', 'rule', rule, `paths "${glob}" 指向被 .gitignore 忽略的路径（以${scopeLabel}为基准），人工核对它与生成脚本的输出一致`);
+        add('warn', 'rule', rule, `paths ${label} 指向被 .gitignore 忽略的路径（以${scopeLabel}为基准），人工核对它与生成脚本的输出一致`);
       } else {
-        add('error', 'rule', rule, `paths "${glob}" 匹配不到任何现存文件（以${scopeLabel}为基准）`);
+        add('error', 'rule', rule, `paths ${label} 匹配不到任何现存文件（以${scopeLabel}为基准）`);
       }
       continue;
     }
     if (isBroadPattern(glob)) {
-      add('warn', 'rule', rule, `paths "${glob}" 过宽：一碰这个目录（或整个作用域）就全中，起不到过滤作用`);
+      add('warn', 'rule', rule, `paths ${label} 过宽：一碰这个目录（或整个作用域）就全中，起不到过滤作用`);
     } else if (sf.length >= 20 && matched.length / sf.length >= 0.5) {
-      add('warn', 'rule', rule, `paths "${glob}" 过宽：匹配了作用域里 ${matched.length}/${sf.length} 个文件，起不到过滤作用`);
+      add('warn', 'rule', rule, `paths ${label} 过宽：匹配了作用域里 ${matched.length}/${sf.length} 个文件，起不到过滤作用`);
     }
   }
 }
@@ -257,9 +321,16 @@ for (const f of [...claudeMds, ...rules]) {
     if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
     if (fence) return;
     const plain = line.replace(/`[^`]*`/g, '');
-    const m = plain.match(/(?:^|\s)@([~./\w][^\s'")\]]*)/);
-    if (m && /[/.]/.test(m[1]) && !/@[\w.-]+\.(com|org|net|io|dev)\b/.test(plain)) {
-      add('error', 'import', f, `\`@${m[1]}\` 是 import，启动时会整份展开进 context；改成自然语言写路径`, i + 1);
+    // 只有目标文件真的存在才会被展开；`@types/node` 这类包名找不到文件，不算
+    for (const m of plain.matchAll(/(?:^|\s)@([~./\w][^\s'")\]]*)/g)) {
+      const ref = m[1].replace(/[.,;:!?，。；：！？、）》]+$/, '');
+      if (!/[/.]/.test(ref)) continue;
+      const abs = ref.startsWith('~/') ? path.join(os.homedir(), ref.slice(2))
+        : path.isAbsolute(ref) ? ref
+        : path.join(ROOT, path.dirname(f), ref);
+      let isFile = false;
+      try { isFile = fs.statSync(abs).isFile(); } catch {}
+      if (isFile) add('error', 'import', f, `\`@${ref}\` 是 import，启动时会整份展开进 context；改成自然语言写路径`, i + 1);
     }
   });
 }
@@ -275,7 +346,8 @@ for (const f of claudeMds) {
   let fence = false;
   lines.forEach((line, i) => {
     if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
-    if (!fence && /(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
+    // 指向文档入口的那一行是模板规定的索引行，不算带原因
+    if (!fence && !line.includes(ENTRY) && /(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
       add('warn', 'claude-md', f, `疑似带原因：「${line.trim().slice(0, 60)}」——CLAUDE.md 只写做什么，原因拆出来：能挂到代码上的进 rule，挂不上的进 .context/ 文档`, i + 1);
     }
   });

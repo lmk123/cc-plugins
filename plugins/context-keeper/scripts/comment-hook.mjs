@@ -25,14 +25,18 @@ if (tool === 'Write') pieces.push({ next: ti.content || '', prev: '' });
 else if (tool === 'Edit') pieces.push({ next: ti.new_string || '', prev: ti.old_string || '' });
 else for (const e of ti.edits || []) pieces.push({ next: e.new_string || '', prev: e.old_string || '' });
 
+// 统一成 \n 再定位，否则 CRLF 文件里找不到 new_string，行号会退回从 1 算
+const lf = (s) => s.replace(/\r\n?/g, '\n');
 let current = null;
 try {
-  current = fs.readFileSync(file, 'utf8');
+  current = lf(fs.readFileSync(file, 'utf8'));
 } catch {}
 
 const squash = (s) => s.replace(/\s+/g, ' ').trim();
 const hits = [];
-for (const { next, prev } of pieces) {
+for (const piece of pieces) {
+  const next = lf(piece.next);
+  const prev = piece.prev;
   const base = tool !== 'Write' && current ? current.indexOf(next) : 0;
   const offset = base > 0 ? current.slice(0, base).split('\n').length - 1 : 0;
   const prevSquashed = squash(prev);

@@ -43,7 +43,7 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
 - 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
 
   ```markdown
-  - 做新需求、评估方案前，先看 `.context/README.md`：以前评估过但没做的需求、外部系统限制、还没有代码的决定
+  - 做新需求、评估方案前，先看 `.context/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
   ```
 
 **整理与体检**

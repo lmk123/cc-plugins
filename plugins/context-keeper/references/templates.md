@@ -150,7 +150,7 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 ```markdown
 ## 更多上下文
 - 各包和各模块的专属约定、背景会按路径通过 rule 自动加载，不用手动查
-- 做新需求、评估方案前，先看 `.context/README.md` 和 `apps/web/.context/README.md`：以前评估过但没做的需求、外部系统限制、还没有代码的决定
+- 做新需求、评估方案前，先看 `.context/README.md` 和 `apps/web/.context/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
 - 记下读代码看不出来的项目知识（原因、踩坑、实测数字、外部约束）：写进 `.claude/rules/`，放不下或挂不到代码上的写进 `.context/`（装了 context-keeper 插件就用 `record-context`），不写成长注释，也不只记在自动记忆里
 - 发布流程：用 `/release`
 ```
