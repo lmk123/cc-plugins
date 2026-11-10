@@ -1,18 +1,20 @@
 ---
 name: record-context
-description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、decision、data 还是不进仓库，并按模板写入。想把项目知识写进 CLAUDE.md、rules 或注释时，或用户说"记一下""沉淀一下"时使用；个人偏好和对 Claude 的纠正直接写自动记忆，不用本 skill。
+description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、项目文档还是不进仓库，并按规范写入。想把项目知识写进 CLAUDE.md、rules 或注释时，或用户说"记一下""沉淀一下"时使用；个人偏好和对 Claude 的纠正直接写自动记忆，不用本 skill。
 ---
 
 # 记录上下文
 
-规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的摘要，与 layout.md 不一致时以 layout.md 为准；要新建 rule / decision / data / skill 文件时，先读模板。
+规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的摘要，与 layout.md 不一致时以 layout.md 为准；要新建 rule / 文档 / skill 文件时，先读模板。
 
 ## 先判断：这值得记吗
 
 只记录**同时满足**以下两条的内容：
 
 1. **本次会话真正验证过**——实际跑过、读过代码确认过、或用户明确告诉你的。不记录推测、不记录"可能"、不记录从别处推断的结论。
-2. **下次会重新踩**——如果下次会话读一遍代码就知道，那就别记（这类内容属于 `DERIVABLE`，记了只会变成噪音）。
+2. **下次会重新踩**——如果下次会话读一遍代码或 `git log` 就知道，那就别记（这类内容属于 `DERIVABLE`，记了只会变成噪音）。
+
+**不要每做完一个需求就落一个文档。** "这次做了什么、改了哪些文件"是 commit 的职责。只有以后做别的事时需要知道、而代码和 commit 里又看不出来的东西才值得记——比如为什么非这么做不可、试过什么不行、实测出来的数字、外部系统的限制。
 
 不确定就问用户，不要默认记下来。
 
@@ -26,18 +28,20 @@ description: 决定一条持久知识（踩过的坑、技术决定、实测数�
 ## 然后判断：写到哪个作用域
 
 1. 按 layout.md「判断形态」确定是 monorepo 还是单仓库（不要凭印象，信号清单以那里为准）。
-2. **单仓库**：rules / skills 进根 `.claude/`，decisions / data 进根 `context/`。
+2. **单仓库**：rules / skills 进根 `.claude/`，文档进根 `context/`。
 3. **monorepo**：这条知识涉及的文件全在某个包内 → 写进该包；涉及两个及以上包 → 写进仓库根。
 
-decisions / data 放 `context/`，**不要放进 `.claude/`**（原因见 layout.md「作用域」）。目录级 CLAUDE.md 下不另建 `.claude/` 或 `context/`。
+文档放 `context/`，**不要放进 `.claude/`**（原因见 layout.md「作用域」）。目录级 CLAUDE.md 下不另建 `.claude/` 或 `context/`。
+
+文档放进 `context/` 的哪一层：它讲的那块在 `context/` 下已经有领域子目录，就放进去；没有就放顶层，**不要为它新建目录，也不要挪动已有文件**——收进子目录要同步改指针，交给 organize-context 做（规则见 layout.md「硬约束」）。
 
 ## 最后判断：写成什么
 
 按 layout.md「判据阶梯」逐步判断，第一个"是"就停，定下标签和目标路径——**写之前先读那一节**，这里不重复阶梯本身，免得两份说法不一致。记录单条知识时额外注意：
 
 - 能写成脚本自动校验（lint / CI / hook）的，**建议用户加检查**；用户没说检查已经加上时，照常写成文字，检查落地后才可以删掉
-- decision 的日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）
-- data 必须带日期和测法
+- 新文档命名为 `YYYY-MM-DD-<slug>.md`，日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）；同主题已有文档就**改那份**，让它描述现状，不要另起一份，也不要改它的文件名
+- 文档里记数字时带上日期和测法
 - 写进 CLAUDE.md 的只写一行，别写一段
 
 写 rule 时 `paths` 的要求（多窄算窄、怎么用 Glob 校验、生成物例外）见 layout.md「硬约束」，写之前读一遍。

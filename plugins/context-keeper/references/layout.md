@@ -31,11 +31,11 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 - `.claude/` 只放 Claude Code 要从这里加载的东西。本规范往里写的只有 `rules/`、`skills/`；已有的 `.claude/CLAUDE.md`、`settings*.json`、`commands/`、`agents/`、hook 脚本等也属于 Claude Code 配置，原样保留，不要当成沉淀文档搬走
 - 项目根的 CLAUDE.md 可以是 `CLAUDE.md`，也可以是 `.claude/CLAUDE.md`，两者等价。本规范说的「根 CLAUDE.md」指实际存在的那个；两个都存在时，写进计划的「需要拍板」，由用户决定是否合并
-- `context/` 放沉淀文档：`decisions/`、`data/`。**不要放进 `.claude/`**——Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑，沉淀文档需要经常追加和修改
+- `context/` 放项目文档（标签 `DOC`）。**不要放进 `.claude/`**——Claude 偶尔会把 `.claude/` 下的文件当成敏感配置而拒绝编辑，文档需要经常修改
 
 | 形态 | 作用域 |
 |---|---|
-| 单仓库 | 只有一个：仓库根。rules / skills 放根 `.claude/`，decisions / data 放根 `context/` |
+| 单仓库 | 只有一个：仓库根。rules / skills 放根 `.claude/`，文档放根 `context/` |
 | monorepo | 仓库根 + 每个包。包的 `.claude/`、`context/` 只在真有内容时才建，不要为了对称建空目录 |
 
 归属判定：
@@ -46,7 +46,7 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 ### 目录级 CLAUDE.md
 
-单仓库里也可能有子目录 `CLAUDE.md`（如 `src/server/CLAUDE.md`），monorepo 的包内也可能有更深层的。它们和包级 CLAUDE.md 一样"触发即全量加载"，按同样标准瘦身：只留"该目录内任何任务都适用"的内容，其余拆出去。**不要**在这些目录下另建 `.claude/` 或 `context/`——它们拆出来的 rules 放进所属作用域（单仓库即根）的 `.claude/`，decisions / data 放进所属作用域的 `context/`，rule 的 `paths` 指向该目录下的具体文件。
+单仓库里也可能有子目录 `CLAUDE.md`（如 `src/server/CLAUDE.md`），monorepo 的包内也可能有更深层的。它们和包级 CLAUDE.md 一样"触发即全量加载"，按同样标准瘦身：只留"该目录内任何任务都适用"的内容，其余拆出去。**不要**在这些目录下另建 `.claude/` 或 `context/`——它们拆出来的 rules 放进所属作用域（单仓库即根）的 `.claude/`，文档放进所属作用域的 `context/`，rule 的 `paths` 指向该目录下的具体文件。
 
 ## 标签与去处
 
@@ -56,9 +56,8 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 | `HOOK` | 能被脚本/lint/CI 确定性校验的（commit message 格式、禁改文件、必须跑的检查） | 建议改成 hook 或 lint 配置。**只提建议，不要自己改 CI**。检查落地之前文字不删，继续按判据阶梯归类放好；用户确认检查已经加上后，才从 prose 里删掉 |
 | `PATH-RULE` | 触发条件比"整个作用域"更窄——只在碰到特定文件、目录或文件类型时才需要知道的（"改 A 必须同步 B"、某个模块的坑、某类文件的专属约定） | `<作用域>/.claude/rules/<领域>/<name>.md`，`paths` 相对作用域根写；跨包联动规则放根，glob 写从仓库根算起的完整路径 |
 | `SKILL` | 有步骤的流程性知识（发布、迁移、排障 playbook），平时不需要 | `<作用域>/.claude/skills/<name>/SKILL.md` |
-| `DECISION` | 历史决策、"为什么现在是这样"、曾经的方案与放弃原因 | `<作用域>/context/decisions/YYYY-MM-DD-<slug>.md`，一决策一文件 |
-| `DATA` | 数字/事实型记录（性能对比、价格变更历史、benchmark、容量实测） | `<作用域>/context/data/<name>.md`，或指出它更该放在代码常量 / CHANGELOG / benchmark 输出里 |
-| `DERIVABLE` | 读代码就能知道的（目录结构说明、逐文件描述、标准语言惯例、框架官方用法） | **删除** |
+| `DOC` | 读代码和 git 历史都得不到、但以后做事需要知道的信息。内容不设限：设计原因与权衡、放弃过的方案、实测数字、外部系统的约束、踩坑经过、领域知识……Claude 觉得值得留下的都行 | `<作用域>/context/[<领域>/]YYYY-MM-DD-<slug>.md`，一主题一文件，按领域分目录（规则见「硬约束」）；数字类内容也可以指出它更该放在代码常量 / CHANGELOG / benchmark 输出里 |
+| `DERIVABLE` | 读代码或 git 历史就能知道的（目录结构说明、逐文件描述、标准语言惯例、框架官方用法；某次需求做了什么、改了哪些文件——这是 commit 的职责） | **删除** |
 | `STALE` | 已不成立、与现状矛盾、或引用了不存在的文件 | **删除**，但必须单独列出让用户确认 |
 
 不属于项目仓库的两类：
@@ -76,16 +75,15 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 
 ## 判据阶梯
 
-按顺序问，第一个"是"就停。一条内容混着"做什么"和"为什么/数字"时先拆开，各自走阶梯——"做什么"的部分通常落到 `PATH-RULE` 或 `ALWAYS`，原因和数字落到 `DECISION` / `DATA`，rule 里留一行路径指过去：
+按顺序问，第一个"是"就停。一条内容混着"做什么"和"为什么/数字/背景"时先拆开，各自走阶梯——"做什么"的部分通常落到 `PATH-RULE` 或 `ALWAYS`，原因、数字、背景落到 `DOC`，rule 里留一行路径指过去：
 
 0. 它属于这个项目吗？个人偏好 → `PERSONAL`；换台机器就不成立 → `ENV-BOUND`
-1. 删掉这条，Claude 会不会犯错？不会 → `DERIVABLE`
+1. 删掉这条，Claude 会不会犯错？读代码或 `git log` 就能知道吗？不会犯错或能查到 → `DERIVABLE`
 2. 能不能写成脚本自动校验？能 → 同时打上 `HOOK`，但**不停**，继续往下问，定出检查落地之前文字放在哪
 3. 它有步骤、平时用不上吗？是 → `SKILL`
-4. 它是"为什么这么定"吗？是 → `DECISION`
-5. 它是数字吗？是 → `DATA`
-6. 它的触发条件比"整个作用域"更窄吗？是 → 先看例外：它适用于某个**已有**目录级 CLAUDE.md 所在目录内的任何任务 → `ALWAYS`，留在（或放进）那个目录级 CLAUDE.md；否则 → `PATH-RULE`（这一步要严格，能提取的都提取）
-7. 剩下的才是 `ALWAYS`，再按归属判定放进根或包的 CLAUDE.md
+4. 它是背景信息（原因、数字、经过、外部约束等），而不是"做什么"的指令吗？是 → `DOC`
+5. 它的触发条件比"整个作用域"更窄吗？是 → 先看例外：它适用于某个**已有**目录级 CLAUDE.md 所在目录内的任何任务 → `ALWAYS`，留在（或放进）那个目录级 CLAUDE.md；否则 → `PATH-RULE`（这一步要严格，能提取的都提取）
+6. 剩下的才是 `ALWAYS`，再按归属判定放进根或包的 CLAUDE.md
 
 ## 目录结构
 
@@ -99,8 +97,8 @@ monorepo 的**包**是 workspace 配置实际匹配到的成员目录，以配�
 │   ├── rules/<领域>/<name>.md     # paths 相对仓库根
 │   └── skills/<name>/SKILL.md
 └── context/
-    ├── decisions/YYYY-MM-DD-<slug>.md
-    └── data/<name>.md
+    ├── YYYY-MM-DD-<slug>.md      # 跨领域的，或所属领域还没攒够几份的
+    └── <领域>/YYYY-MM-DD-<slug>.md
 ```
 
 monorepo：
@@ -111,32 +109,40 @@ monorepo：
 ├── .claude/
 │   ├── rules/<领域>/<name>.md     # 跨包 rule，paths 写仓库根起的完整路径
 │   └── skills/                   # 跨包 skill
-├── context/
-│   └── decisions/  data/         # 跨包沉淀
+├── context/                      # 跨包文档，按领域分目录
 └── apps/web/
     ├── CLAUDE.md                 # 该包 ALWAYS + 一行指路
     ├── .claude/
     │   ├── rules/<领域>/<name>.md # paths 相对 apps/web/
     │   └── skills/
-    └── context/
-        └── decisions/  data/
+    └── context/                  # 该包的文档，按领域分目录
 ```
 
-`<领域>` 是按主题分的子目录（`db/`、`api/`、`styling/`）。一个作用域只有寥寥几个 rule 时可以直接平铺在 `rules/` 下。
+`<领域>` 是"讲的是系统哪一块"的子目录（`db/`、`api/`、`styling/`），rules 和 context 共用同一套领域名。一个作用域只有寥寥几个 rule 时可以直接平铺在 `rules/` 下；context 什么时候建领域目录见「硬约束」。
 
 ## 硬约束
 
 - **禁止 `@` import**，指路一律用自然语言。
 - **`paths` 要窄到能真正起过滤作用。** 不许写 `**/*`、`src/**`、`packages/**` 这种一碰作用域就全中的写法；glob 必须至少匹配到一个现存文件——校验时以 rule 所属作用域的根为基准（包内 rule 在包目录下跑 Glob，根 rule 在仓库根跑），否则包相对的 glob 会被误判为失效。例外：glob 指向生成物或被 `.gitignore` 忽略的文件（如 `src/generated/`）时，干净 checkout 里可能不存在，Glob 也可能过滤掉它们；这时改为核对 glob 与生成脚本的输出路径或 `.gitignore` 条目一致，不判为失效。
-- **CLAUDE.md 一条一行。** 凡是能被 `paths` 限定触发条件的，一律走 rule；凡是带"因为/当初/以前"的，一律走 decision。rule 正文写"做什么"，不写"为什么"，为什么归 decision，正文里用一行路径指过去。
+- **CLAUDE.md 一条一行。** 凡是能被 `paths` 限定触发条件的，一律走 rule；凡是带"因为/当初/以前"的，一律走文档。rule 正文写"做什么"，不写"为什么"，为什么归文档，正文里用一行路径指过去。
 - **一件事只写一处。** 同一件事散在两个文件里比记在一个长文件里更糟。
-- **CLAUDE.md 末尾的「更多上下文」索引**用自然语言写（格式见模板）。包/目录级 CLAUDE.md 有自己的 decisions/data 时，也在末尾加一行同样性质的指路。
+- **CLAUDE.md 末尾的「更多上下文」索引**用自然语言写（格式见模板）。包级 CLAUDE.md 所在的包有自己的 `context/` 时，也在末尾加一行同样性质的指路。
 - **代码注释守本分：** 只收"读这段代码的人此刻需要知道的"。历史沿革、数字、长篇原因写进 `context/`（或 `.claude/rules/`），在原处留一行带路径的指针，路径从仓库根算起，方便 grep：
 
   ```ts
-  // 这里的重试次数固定为 3，原因见 apps/web/context/decisions/2026-09-05-retry-count.md
+  // 这里的重试次数固定为 3，原因见 apps/web/context/api/2026-09-05-retry-policy.md
   ```
 
   不要留空白，也不要留一句没有信息量的 `// 见文档`。
 - **不碰用户级配置：** 不改 `~/.claude/CLAUDE.md`、`~/.claude/settings.json`。
-- **decision 文件名用 `YYYY-MM-DD-<slug>.md`，不用递增编号。** 用户会在多个 worktree 里并发做任务，递增编号会让多个 PR 各自新建同一个号的文件而冲突；日期 + slug 只有同一天记同一件事才会撞上，而那本来就是真冲突。日期取决定做出的那天：新记录用当天；从 CLAUDE.md、注释、记忆迁移来的，用 `git log -S` / `git blame` 查原文首次出现的日期，查不到就用迁移当天。slug 用英文小写短横线，概括决定本身（`retry-count`，不是 `fix-bug`）。
+- **文档按主题组织，不按需求组织。** 不要每做一个需求就落一个文档——"这次做了什么"由 commit 记录。只有以后做事需要知道、且读代码和 `git log` 都得不到的信息才写文档，并且优先改已有的同主题文档，而不是新建。
+- **文档写的是现状。** 情况变了就原地改写，不要追加"更新：……"、不要另建新文件再把旧的标成作废，旧版本交给 git。被放弃的方案只在"怕以后有人重新提"时才留，一两句话写明放弃了什么、为什么。
+- **文档文件名用 `YYYY-MM-DD-<slug>.md`**，让目录按创建顺序排列。slug 用英文小写短横线，概括主题（`retry-policy`，不是 `fix-bug`）。
+  - 日期是文档**创建**的日期：新建用当天；从 CLAUDE.md、注释、记忆迁移来的，用 `git log -S` / `git blame` 查原文首次出现的日期，查不到就用迁移当天。之后原地更新内容时**不改文件名**，否则所有指向它的指针都会失效。几份文档合并成一份时，沿用其中最早的日期。
+  - 不用递增编号：用户会在多个 worktree 里并发做任务，递增编号会让多个 PR 各自新建同一个号的文件而冲突；日期 + slug 只有同一天记同一件事才会撞上，而那本来就是真冲突。
+- **文档按领域分目录，不按信息类型分。** 不建 `decisions/`、`data/`、`pitfalls/` 这类按"是什么信息"分的目录——类型永远列不全，查找时也不是按类型找的：要改支付模块时，想看的是支付相关的一切，不管它是原因、数字还是坑。领域指"讲的是系统哪一块"：
+  - **领域名取自项目已有的叫法，不自造。** 优先用同一作用域 `.claude/rules/<领域>/` 已在用的名字，其次用代码里的模块名、目录名。同一块在 rules 和 context 里用同一个名字。
+  - **先平铺，攒够再分。** 某领域在 `context/` 顶层攒到 3 份及以上文档时才建 `<领域>/` 子目录，不要为一两份文档开目录。子目录里的文件同样带日期，目录内按时间排序。
+  - **跨领域的留在顶层。** 涉及两块及以上、或说不清属于哪块的文档，放 `context/` 顶层，不硬塞进某个领域。
+  - **只分一层，不嵌套。** monorepo 的包级 `context/` 已经按包分开，领域目录是包内这一层。
+  - **移动文件要同步改指针。** 把文档收进子目录或给领域改名，会让指向它的指针注释、rule 里的路径、CLAUDE.md 索引失效，移动时必须一并更新。移动只在 organize-context 里做；record-context 日常记录时不挪已有文件。
