@@ -1,5 +1,5 @@
 {
-  "description": "写入长注释块时提醒把背景信息移到 .context/ 或 rule（只提醒，不阻断；CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）",
+  "description": "写入长注释块时提醒把背景信息移进 rule 或 .context/（只提醒，不阻断；CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）",
   "hooks": {
     "PostToolUse": [
       {

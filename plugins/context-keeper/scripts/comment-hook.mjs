@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 背景信息该进 .context/ 或 rule。
+// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 背景信息该进 rule 或 .context/。
 // 只提醒，不阻断。设环境变量 CONTEXT_KEEPER_COMMENT_HOOK=0 可关闭。
 
 import fs from 'node:fs';
@@ -47,7 +47,7 @@ if (!hits.length) process.exit(0);
 
 const msg = [
   `[context-keeper] 刚写入的 ${file} 里有长注释块：${hits.join('、')}。`,
-  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范用 record-context 把它移到 .context/ 或 rule，',
+  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范用 record-context 把它移进 paths 指向这个文件的 rule（放不下的才进 .context/ 文档），',
   '原处只在这段代码确有讲究（顺序不能换、数值不能随便改）时留一行带路径的指针。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
 ].join('');
 
