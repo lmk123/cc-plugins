@@ -46,7 +46,7 @@ paths:
 
 ## 领域索引 rule
 
-给**能挂到代码上、但 rule 装不下**的文档用。每个有这类文档的领域一个，文件名固定为 `context-index.md`，`paths` 覆盖这个领域的代码。文件 `apps/web/.claude/rules/api/context-index.md`：
+给**能挂到代码上、但不属于某条具体 rule** 的文档用（外部系统调研、领域内几处共用的数据）。从某条 rule 拆出来、已被那条 rule 用一行路径指到的文档不用再登记进来。每个有这类文档的领域一个，文件名固定为 `context-index.md`，`paths` 覆盖这个领域的代码。文件 `apps/web/.claude/rules/api/context-index.md`：
 
 ```markdown
 ---

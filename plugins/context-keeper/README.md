@@ -16,7 +16,7 @@ context-keeper 把这些内容按"什么时候需要知道"分流：
 | 任何任务都可能违反的硬约束 | `CLAUDE.md`，一条一行 | 一直 |
 | 碰到特定文件才需要知道的：做什么、坑，连同原因、经过、数字 | `.claude/rules/<领域>/<name>.md`，带 `paths:` | 读/改到匹配文件时，一定被看到 |
 | 有步骤的流程 | `.claude/skills/<name>/SKILL.md` | 启动时只有 description |
-| 能挂到代码上、但 rule 装不下的长背景（长篇权衡、实测数字的历史表格、外部系统调研） | `.context/<领域>/<slug>.md`，登记在领域索引 rule | 碰到该领域代码时出现文档清单，按需读 |
+| 能挂到代码上、但 rule 装不下的长背景（长篇权衡、实测数字的历史表格、外部系统调研） | `.context/<领域>/<slug>.md`，由拆出它的 rule 留一行路径；不属于某条 rule 的登记在领域索引 rule | 碰到 rule 或该领域代码时出现路径，按需读 |
 | 挂不到代码上的背景（评估过但没做的需求、外部系统限制、还没有代码的决定） | `.context/<领域>/<slug>.md`，登记在 `.context/README.md` | 根 CLAUDE.md 常驻一行指向入口，做新需求前查 |
 | 个人偏好 / 环境绑定 | 不进仓库，留在自动记忆 | — |
 
@@ -39,7 +39,8 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
 **读取端**
 
 - rule：碰到匹配的文件时自动加载，背景就在正文里。
-- 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是长文档的清单，碰到代码时这几行进 context，Claude 按需读文档。
+- rule 里的文档路径：从 rule 拆出去的长背景，rule 正文留一行路径，命中 rule 时一起进 context。
+- 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是不属于某条具体 rule 的长文档清单，碰到代码时这几行进 context，Claude 按需读文档。
 - 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
 
   ```markdown
@@ -55,7 +56,7 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
   node <插件目录>/scripts/check.mjs [路径] [--comments]
   ```
 
-  检查 rule 的 `paths` 是否生效、rule 是否过长、`@` import、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，其他 Markdown 和代码块里的示例路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
+  检查 rule 的 `paths` 是否生效、rule 是否过长、`@` import、`.claude/rules/`、`.claude/skills/`、`.context/` 有没有被 `.gitignore` 忽略、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，其他 Markdown 和代码块里的示例路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
 
 ## 改造前后
 

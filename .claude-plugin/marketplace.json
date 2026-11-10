@@ -14,7 +14,7 @@
       "name": "context-keeper",
       "source": "./plugins/context-keeper",
       "description": "整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，背景按代码路径挂进 rules，装不下或挂不到代码上的进 .context/，不散在注释里；兼容 monorepo 与单仓库",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "category": "productivity"
     }
   ]

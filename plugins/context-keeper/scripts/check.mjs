@@ -428,31 +428,36 @@ for (const d of docs) {
   }
 }
 
-// ---------- .context/ 能否进 git ----------
+// ---------- .context/、.claude/rules/、.claude/skills/ 能否进 git ----------
 
-// 两路：一是磁盘上已经存在、但被忽略的 `.context/`（被忽略的文件不在 ls-files 里，上面的分类看不到它们）；
-// 二是还没建 `.context/` 的作用域，按根和已有 `.claude/` 的位置探一下写进去会不会被忽略。
+// 两路：一是磁盘上已经存在、但被忽略的 `.context/`、`.claude/`（被忽略的文件不在 ls-files 里，上面的分类看不到它们）；
+// 二是按根和已有 `.claude/`、`.context/` 的位置探一下写进去会不会被忽略。
+// `.claude/` 下只探 rules/ 和 skills/：settings.local.json 之类本来就该被忽略。
 // 目录级 CLAUDE.md 所在目录不是作用域，不探。
-const ignoredScopes = new Set();
+const scopes = new Set(['']);
 if (IS_GIT) {
   const r = git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']);
   for (const p of r.stdout.split('\0').filter(Boolean)) {
     const segs = p.replace(/\/$/, '').split('/');
-    const k = segs.indexOf('.context');
-    if (k !== -1) ignoredScopes.add(segs.slice(0, k).map((x) => `${x}/`).join(''));
+    const k = segs.findIndex((x) => x === '.context' || x === '.claude');
+    if (k !== -1) scopes.add(segs.slice(0, k).map((x) => `${x}/`).join(''));
   }
 }
-const scopes = new Set(['']);
-for (const f of [...rules, ...docs, ...skills]) {
+// 已有 `.claude/`（哪怕只有 settings.json）或 `.context/` 的目录都当作作用域探一下
+for (const f of FILES) {
   for (const marker of ['.claude/', '.context/']) {
     const i = f.indexOf(marker);
     if (i !== -1 && (i === 0 || f[i - 1] === '/')) { scopes.add(f.slice(0, i)); break; }
   }
 }
-const PROBE = ['.context', '__probe__.md'].join('/'); // 拆开写，免得脚本复制进项目后把这里当成失效指针
-for (const p of ignored([...scopes].map((s) => s + PROBE))) ignoredScopes.add(p.slice(0, -PROBE.length));
-for (const s of ignoredScopes) {
-  add('error', 'context-dir', `${s}.context/`, '`.context/` 被 .gitignore 忽略了，文档进不了仓库：调整 .gitignore 后再往里写');
+// 拆开写，免得脚本复制进项目后把这里当成失效指针
+const PROBES = [
+  { dir: '.context/', probe: ['.context', '__probe__.md'].join('/'), category: 'context-dir', msg: '`.context/` 被 .gitignore 忽略了，文档进不了仓库：调整 .gitignore 后再往里写' },
+  { dir: '.claude/rules/', probe: '.claude/rules/__probe__.md', category: 'claude-dir', msg: '`.claude/rules/` 被 .gitignore 忽略了：rule 进不了仓库，队友看不到，本脚本也检查不到里面的文件。调整 .gitignore（比如只忽略 `.claude/settings.local.json`）后再往里写' },
+  { dir: '.claude/skills/', probe: '.claude/skills/__probe__/SKILL.md', category: 'claude-dir', msg: '`.claude/skills/` 被 .gitignore 忽略了：skill 进不了仓库，队友看不到。调整 .gitignore 后再往里写' },
+];
+for (const { dir, probe, category, msg } of PROBES) {
+  for (const p of ignored([...scopes].map((s) => s + probe))) add('error', category, p.slice(0, -probe.length) + dir, msg);
 }
 
 // ---------- 指针：失效与孤儿 ----------
@@ -460,6 +465,8 @@ for (const s of ignoredScopes) {
 // 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见.context/…"这种紧贴中文的写法也能认出来
 const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*\.context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
 const referenced = new Set(); // 被文档以外的文件指到
+const fromRule = new Set(); // 被 rule（含领域索引 rule）指到：碰到 rule 的 paths 时路径随 rule 进 context，等于已登记
+const RULE_SET = new Set(rules);
 const inEntry = new Set(); // 登记在文档入口里
 const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
 // 指针只认 Claude 会读到的地方：CLAUDE.md、rule、skill、文档、文档入口，以及源码。
@@ -490,6 +497,7 @@ for (const f of filesMentioningContext()) {
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
+  const isRule = RULE_SET.has(f);
   // Markdown 代码块里的是示例，不算指针
   for (const [line, i] of proseLines(text, !isMd)) {
     if (!line.includes('.context/')) continue;
@@ -503,6 +511,7 @@ for (const f of filesMentioningContext()) {
         if (!fromDoc) referenced.add(p);
         if (isEntry) inEntry.add(p);
         if (isRootClaude) fromRootClaude.add(p);
+        if (isRule) fromRule.add(p);
       } else {
         add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
@@ -510,7 +519,7 @@ for (const f of filesMentioningContext()) {
   }
 }
 for (const d of docs) {
-  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回 rule，不能就登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
+  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回 rule，不能就在相关 rule 里留一行路径、或登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
 }
 for (const e of entries) {
   if (!fromRootClaude.has(e)) add('warn', 'entry', e, '文档入口没被根 CLAUDE.md 指到：挂不到代码上的文档在做新需求时不会被看到；在根 CLAUDE.md「更多上下文」里写上这个路径');
@@ -522,8 +531,9 @@ for (const [key, list] of domainsWithDocs) {
   const [scope, domain] = key.split('|');
   const idx = `${scope}.claude/rules/${domain}/context-index.md`;
   if (FILE_SET.has(idx)) continue;
-  const unindexed = list.filter((d) => !inEntry.has(d));
-  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
+  // 已被某条 rule 指到的文档，碰到那条 rule 的 paths 时就会被带出来，不要求另建索引 rule
+  const unindexed = list.filter((d) => !inEntry.has(d) && !fromRule.has(d));
+  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}、没被任何 rule 指到，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
 }
 
 // ---------- 放错地方的文档 ----------
