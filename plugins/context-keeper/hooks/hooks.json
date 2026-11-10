@@ -1,0 +1,17 @@
+{
+  "description": "写入长注释块时提醒把背景信息移到 .context/ 或 rule（只提醒，不阻断；CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 && node \"${CLAUDE_PLUGIN_ROOT}/scripts/comment-hook.mjs\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
