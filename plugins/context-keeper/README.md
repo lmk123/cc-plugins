@@ -14,7 +14,7 @@
 | 任何任务都可能违反的硬约束 | `CLAUDE.md`，一条一行 |
 | 只在碰到特定文件时才需要知道的 | `.claude/rules/<领域>/<name>.md`，带 `paths:` |
 | 有步骤的流程 | `.claude/skills/<name>/SKILL.md` |
-| 读代码和 git 历史得不到的背景（原因、实测数字、踩坑、外部约束……） | `context/[<领域>/]YYYY-MM-DD-<slug>.md`，按领域分目录 |
+| 读代码得不到的背景（原因、实测数字、踩坑经过、外部约束……） | `context/[<领域>/]YYYY-MM-DD-<slug>.md`，按领域分目录 |
 | 个人偏好 / 环境绑定 | 不进仓库 |
 
 monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.claude/`、`context/`，跨包内容放在仓库根。
