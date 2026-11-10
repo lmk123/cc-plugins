@@ -90,14 +90,24 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 本包的文档在 `apps/web/context/`。
 ```
 
-用了替代文档目录的作用域（见 layout.md「作用域」），索引或指路行写实际目录，并注明 `context/` 不是文档目录，例如：
+另选了文档目录的作用域（见 layout.md「作用域」），索引或指路行写实际目录，并注明 `context/` 不是文档目录，例如：
 
 ```markdown
 - 项目文档：`docs/context/`，按领域分目录（根下的 `context/` 是代码，不是文档）
 ```
 
-用户选择保留旧结构的 `context/decisions/`、`context/data/` 时，在同一行后面注明，供以后的体检和记录识别：
+```markdown
+本包的文档在 `apps/web/docs/context/`（`apps/web/context/` 是代码，不是文档）。
+```
+
+用户选择保留旧结构的类型目录（怎么认见 layout.md「硬约束」）时，在同一行后面注明，供以后的体检和记录识别。根索引：
 
 ```markdown
 - 项目文档：`context/`，按领域分目录（`decisions/`、`data/` 是旧结构，按用户决定保留，新文档不放进去）
+```
+
+包的指路行：
+
+```markdown
+本包的文档在 `apps/web/context/`（`decisions/` 是旧结构，按用户决定保留，新文档不放进去）。
 ```
