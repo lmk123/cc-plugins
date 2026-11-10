@@ -1,18 +1,20 @@
 ---
 name: record-context
-description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、decision、data 还是不进仓库，并按模板写入。想把项目知识写进 CLAUDE.md、rules 或注释时，或用户说"记一下""沉淀一下"时使用；个人偏好和对 Claude 的纠正直接写自动记忆，不用本 skill。
+description: 决定一条持久知识（踩过的坑、技术决定、实测数字、可复用步骤）该写到 CLAUDE.md、rule、skill、项目文档还是不进仓库，并按规范写入。想把项目知识写进 CLAUDE.md、rules 或注释时，或用户说"记一下""沉淀一下"时使用；个人偏好和对 Claude 的纠正直接写自动记忆，不用本 skill。
 ---
 
 # 记录上下文
 
-规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的摘要，与 layout.md 不一致时以 layout.md 为准；要新建 rule / decision / data / skill 文件时，先读模板。
+规范全文在 `${CLAUDE_PLUGIN_ROOT}/references/layout.md`，模板在 `${CLAUDE_PLUGIN_ROOT}/references/templates.md`。下面是日常够用的摘要，与 layout.md 不一致时以 layout.md 为准；要新建 rule / 文档 / skill 文件时，先读模板。
 
 ## 先判断：这值得记吗
 
 只记录**同时满足**以下两条的内容：
 
 1. **本次会话真正验证过**——实际跑过、读过代码确认过、或用户明确告诉你的。不记录推测、不记录"可能"、不记录从别处推断的结论。
-2. **下次会重新踩**——如果下次会话读一遍代码就知道，那就别记（这类内容属于 `DERIVABLE`，记了只会变成噪音）。
+2. **下次会重新踩**——如果下次会话读一遍代码就知道，那就别记（这类内容属于 `DERIVABLE`，记了只会变成噪音）。只写在 commit message 里的怎么算，见 layout.md「判据阶梯」第 1 步。
+
+**不要每做完一个需求就落一个文档。** "这次做了什么、改了哪些文件"是 commit 的职责。只有以后做别的事时需要知道、而读代码又看不出来的东西才值得记——比如为什么非这么做不可、试过什么不行、实测出来的数字、外部系统的限制。
 
 不确定就问用户，不要默认记下来。
 
@@ -26,33 +28,37 @@ description: 决定一条持久知识（踩过的坑、技术决定、实测数�
 ## 然后判断：写到哪个作用域
 
 1. 按 layout.md「判断形态」确定是 monorepo 还是单仓库（不要凭印象，信号清单以那里为准）。
-2. **单仓库**：rules / skills 进根 `.claude/`，decisions / data 进根 `context/`。
+2. **单仓库**：rules / skills 进根 `.claude/`，文档进根 `.context/`。
 3. **monorepo**：这条知识涉及的文件全在某个包内 → 写进该包；涉及两个及以上包 → 写进仓库根。
 
-decisions / data 放 `context/`，**不要放进 `.claude/`**（原因见 layout.md「作用域」）。目录级 CLAUDE.md 下不另建 `.claude/` 或 `context/`。
+文档只放进该作用域的 `.context/`：不放 `.claude/`，也不放不带点的 `context/`。`.context/` 被 `.gitignore` 忽略或被别的用途占用时，停下来告诉用户（见 layout.md「作用域」）。目录级 CLAUDE.md 下不另建 `.claude/` 或 `.context/`。旧版插件的 `context/decisions/`、`context/data/` 不往里写，查重时照样要 grep。
+
+该作用域的 CLAUDE.md 里缺指向 `.context/` 的那一行（根是「更多上下文」索引里的项目文档行，包是末尾的指路行）时，不管这是不是第一份文档，都按模板补上，否则以后没人知道这里有文档。包还没有 CLAUDE.md 时，不为这一行新建，根索引里的"各包的 `.context/`"已经指过去了；根还没有 CLAUDE.md 时，新建一个只含「更多上下文」索引的。根索引里还留着旧版插件的行（「历史决策：`context/decisions/` ……」）时，旧行不动，照样补新行，并提醒用户跑一次 organize-context 整理旧结构。
+
+文档放进 `.context/` 的哪一层：它讲的那块已经有领域子目录，就放进去；没有就放顶层，**不要为它新建目录，也不要挪动已有文件**——收进子目录要同步改指针，交给 organize-context 做（规则见 layout.md「硬约束」）。
 
 ## 最后判断：写成什么
 
 按 layout.md「判据阶梯」逐步判断，第一个"是"就停，定下标签和目标路径——**写之前先读那一节**，这里不重复阶梯本身，免得两份说法不一致。记录单条知识时额外注意：
 
 - 能写成脚本自动校验（lint / CI / hook）的，**建议用户加检查**；用户没说检查已经加上时，照常写成文字，检查落地后才可以删掉
-- decision 的日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）
-- data 必须带日期和测法
+- 新文档命名为 `YYYY-MM-DD-<slug>.md`，日期用当天，**不用递增编号**（并发 worktree 会抢同一个号导致 PR 冲突）；同主题已有文档就**改那份**，让它描述现状，不要另起一份，也不要改它的文件名
+- 文档里记数字的要求见 layout.md「硬约束」的「实测数字」，写之前读一遍
 - 写进 CLAUDE.md 的只写一行，别写一段
 
 写 rule 时 `paths` 的要求（多窄算窄、怎么用 Glob 校验、生成物例外）见 layout.md「硬约束」，写之前读一遍。
 
 ## 写之前必须先查重
 
-`ls` 目标目录，在目标作用域和根的 `.claude/`、`context/`、CLAUDE.md 里 `grep` 关键词，确认没有同主题的已有文件。有就**改那个文件**，不要新建。同一件事散在两个文件里比记在一个长文件里更糟。
+`ls` 目标目录，再按 layout.md「硬约束」的「新建前先查重」grep 一遍（范围以那里为准：整个仓库所有作用域，`.context/` 显式传路径）。有同主题的已有文件就**改那个文件**，不要新建；它在别的作用域、而这次的内容让归属变了的，照样改那份，并在回复里告诉用户，挪动交给 organize-context。同一件事散在两个文件里比记在一个长文件里更糟。
 
 ## 写完之后
 
-在回复末尾用一行告诉用户写到了哪个文件，例如：
+在回复末尾用一行告诉用户写到了哪个文件（顺带补了 CLAUDE.md 的索引行或指路行的，一起列上），例如：
 
 > 记了一条：`apps/web/.claude/rules/db/regenerate-types.md`
 
-不要静默写入。用户需要知道 `.claude/` 和 `context/` 又长了什么，否则这套结构会重新变成一个没人看的黑箱。
+不要静默写入。用户需要知道 `.claude/` 和 `.context/` 又长了什么，否则这套结构会重新变成一个没人看的黑箱。
 
 ## 不要做的事
 
