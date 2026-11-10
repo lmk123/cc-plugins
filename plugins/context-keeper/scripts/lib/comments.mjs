@@ -8,17 +8,22 @@ const SLASH = { line: ['//'], block: true, html: false };
 const HASH = { line: ['#'], block: false, html: false };
 const DASH = { line: ['--'], block: false, html: false };
 const MARKUP = { line: ['//'], block: true, html: true };
+// strings：能跨行的字符串分隔符，字符串里以 // 或 # 开头的行不是注释
+const JS = { ...SLASH, strings: ['`'] };
+const TEXT_BLOCK = { ...SLASH, strings: ['"""'] };
+const DART = { ...SLASH, strings: ['"""', "'''"] };
+const PY = { ...HASH, strings: ['"""', "'''"] };
 // Go 和 Ruby 没有专门的文档注释语法，紧贴在声明前的行注释就是文档
-const GO = { ...SLASH, docBefore: /^(package|func|type|var|const)\b/ };
+const GO = { ...SLASH, strings: ['`'], docBefore: /^(package|func|type|var|const)\b/ };
 const RUBY = { ...HASH, docBefore: /^(def|class|module|attr_(reader|writer|accessor))\b|^[A-Z]\w*\s*=[^=]/ };
 
 const LANGS = {
-  js: SLASH, jsx: SLASH, mjs: SLASH, cjs: SLASH, ts: SLASH, tsx: SLASH, mts: SLASH, cts: SLASH,
-  java: SLASH, kt: SLASH, kts: SLASH, scala: SLASH, groovy: SLASH, gradle: SLASH,
+  js: JS, jsx: JS, mjs: JS, cjs: JS, ts: JS, tsx: JS, mts: JS, cts: JS,
+  java: TEXT_BLOCK, kt: TEXT_BLOCK, kts: TEXT_BLOCK, scala: TEXT_BLOCK, groovy: TEXT_BLOCK, gradle: SLASH,
   c: SLASH, h: SLASH, cc: SLASH, cpp: SLASH, cxx: SLASH, hpp: SLASH, m: SLASH, mm: SLASH,
-  cs: SLASH, go: GO, rs: SLASH, swift: SLASH, dart: SLASH, php: SLASH, zig: SLASH,
+  cs: SLASH, go: GO, rs: SLASH, swift: TEXT_BLOCK, dart: DART, php: SLASH, zig: SLASH,
   scss: SLASH, less: SLASH, css: { line: [], block: true, html: false },
-  py: HASH, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
+  py: PY, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
   yaml: HASH, yml: HASH, toml: HASH, ex: HASH, exs: HASH, nim: HASH, cr: HASH, tf: HASH,
   sql: DASH, lua: DASH, hs: DASH,
   vue: MARKUP, svelte: MARKUP, astro: MARKUP,
@@ -58,12 +63,32 @@ function commentBody(t, prefixes, idx) {
   return null;
 }
 
+// 落在跨行字符串（Python 三引号、JS 模板字符串、Go 原始字符串等）里的行下标。
+// 只按分隔符粗略配对：整行是注释的行不参与配对，反斜杠转义下一个字符。
+function stringLines(lines, lang) {
+  const inside = new Set();
+  if (!lang.strings) return inside;
+  let open = null;
+  lines.forEach((l, k) => {
+    if (open) inside.add(k);
+    else if (commentBody(l.trimStart(), lang.line, k) !== null) return;
+    for (let i = 0; i < l.length; i++) {
+      if (l[i] === '\\') { i++; continue; }
+      const d = open ? (l.startsWith(open, i) ? open : null) : lang.strings.find((x) => l.startsWith(x, i));
+      if (!d) continue;
+      open = open ? null : d;
+      i += d.length - 1;
+    }
+  });
+  return inside;
+}
+
 // 连续的独立行注释，允许中间夹一个空行。返回 [{ items: [{ k, body }], doc }]，k 为 0 起的行下标。
-// 紧贴声明（docBefore）的那一段（不跨空行）单独成一段，标为 doc。
-function lineRuns(lines, lang) {
+// 紧贴声明（docBefore）的那一段（不跨空行）单独成一段，标为 doc。str 为 stringLines 的结果。
+function lineRuns(lines, lang, str) {
   const runs = [];
   if (!lang.line.length) return runs;
-  const body = (k) => commentBody(lines[k].trimStart(), lang.line, k);
+  const body = (k) => (str.has(k) ? null : commentBody(lines[k].trimStart(), lang.line, k));
   let i = 0;
   while (i < lines.length) {
     if (body(i) === null) { i++; continue; }
@@ -93,10 +118,11 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   const lang = langFor(file);
   if (!lang) return [];
   const lines = text.split(/\r?\n/);
+  const str = stringLines(lines, lang);
   const blocks = [];
 
   // 1. 连续的独立行注释
-  for (const run of lineRuns(lines, lang)) {
+  for (const run of lineRuns(lines, lang, str)) {
     if (run.doc) continue;
     const bodies = run.items.map((x) => x.body);
     const start = run.items[0].k;
@@ -107,11 +133,12 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
     }
   }
 
-  // 2. /* */ 块注释和 <!-- --> 注释：必须从行首开始（前面只有空白）
+  // 2. /* */ 块注释和 <!-- --> 注释：必须从行首开始（前面只有空白）。
+  // 行数只算正文：单独占一行的开头 /* 和结尾 */ 不算，和行注释的口径一致
   const scan = (open, close, kind, skip) => {
     for (let i = 0; i < lines.length; i++) {
       const t = lines[i].trimStart();
-      if (!t.startsWith(open)) continue;
+      if (str.has(i) || !t.startsWith(open)) continue;
       if (skip && skip(t)) continue;
       let j = i;
       let closed = lines[i].indexOf(close, lines[i].indexOf(open) + open.length) !== -1;
@@ -119,7 +146,9 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
         j++;
         closed = lines[j].includes(close);
       }
-      const count = j - i + 1;
+      let count = j - i + 1;
+      if (t.trim() === open) count--;
+      if (j > i && lines[j].trim() === close) count--;
       const body = lines.slice(i, j + 1).join('\n');
       if (closed && count >= minLines && !(i <= 2 && isLicense(body)) && !isLicense(body.split('\n').slice(0, 3).join('\n'))) {
         blocks.push({ start: i + 1, end: j + 1, lines: count, text: body, kind });
@@ -138,7 +167,8 @@ export function findSignalComments(text, file) {
   const lang = langFor(file);
   if (!lang) return [];
   const lines = text.split(/\r?\n/);
-  const docLines = new Set(lineRuns(lines, lang).filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
+  const str = stringLines(lines, lang);
+  const docLines = new Set(lineRuns(lines, lang, str).filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
   const prefixes = [...lang.line];
   if (lang.block) prefixes.push('/*');
   if (lang.html) prefixes.push('<!--');
@@ -150,6 +180,7 @@ export function findSignalComments(text, file) {
   let block = null; // null | 'doc' | 'plain' | 'html'
   lines.forEach((l, idx) => {
     const t = l.trimStart();
+    if (str.has(idx)) return;
     if (block === 'html') {
       if (t.includes('-->')) block = null;
       hit(idx, t, t);

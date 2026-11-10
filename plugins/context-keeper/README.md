@@ -55,7 +55,7 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
   node <插件目录>/scripts/check.mjs [路径] [--comments]
   ```
 
-  检查 rule 的 `paths` 是否生效、rule 是否过长、`@` import、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，有错误时退出码为 1。没有依赖，可以复制进项目接 CI。
+  检查 rule 的 `paths` 是否生效、rule 是否过长、`@` import、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，其他 Markdown 和代码块里的示例路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
 
 ## 改造前后
 

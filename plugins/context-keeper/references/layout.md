@@ -163,6 +163,6 @@
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" [路径] [--comments]
 ```
 
-检查：rule 的 frontmatter 位置、缺 `paths`、glob 匹配不到文件 / 基准错位 / 过宽、正文超过 20 行；skill 缺 description；CLAUDE.md 和 rule 里的 `@` import；CLAUDE.md 疑似带原因的行；文档文件名（日期/编号前缀、非 slug）、嵌套领域目录、缺领域索引 rule；`.context/README.md` 没被根 CLAUDE.md 指到；失效指针；孤儿文档（没登记在任何入口、rule、CLAUDE.md 或代码里）；`.context/` 被 `.gitignore` 忽略；放在 `.claude/` 下或按类型分目录的文档。`--comments` 额外列出长注释块和带信号词的注释作为搬运候选。带路径时只报告该路径下文件的问题。
+检查：rule 的 frontmatter 位置、缺 `paths`、glob 匹配不到文件 / 基准错位 / 过宽、正文超过 20 行；skill 缺 description；CLAUDE.md 和 rule 里的 `@` import；CLAUDE.md 疑似带原因的行；文档文件名（日期/编号前缀、非 slug）、嵌套领域目录、缺领域索引 rule；`.context/README.md` 没被根 CLAUDE.md 指到；失效指针（只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，代码块里的示例不算）；孤儿文档（没登记在任何入口、rule、CLAUDE.md 或代码里）；`.context/` 被 `.gitignore` 忽略；放在 `.claude/` 下或按类型分目录的文档。`--comments` 额外列出长注释块和带信号词的注释作为搬运候选。带路径时只报告该路径下文件的问题。
 
-脚本的判断是机械的：「警告」「提示」要结合上下文看（比如 glob 指向的生成物、确实该常驻的 rule），「错误」基本都要处理。有错误时退出码为 1。`node` 不可用时按本规范手工检查。脚本没有依赖，用户想接进 CI 时可以复制进项目。
+脚本的判断是机械的：「警告」「提示」要结合上下文看（比如 glob 指向的生成物、确实该常驻的 rule），「错误」基本都要处理。有错误时退出码为 1。`node` 不可用时按本规范手工检查。脚本没有依赖，用户想接进 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。

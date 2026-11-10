@@ -50,21 +50,25 @@ if (patch && patch.length) {
       n++;
     }
   }
-} else if (tool === 'Write' && resp.type !== 'update') {
-  // 新建文件：整份都是新写的
+} else if (tool === 'Write' && resp.type === 'create') {
+  // 明确是新建文件：整份都是新写的。type 缺失时分不清新建还是覆盖，宁可不提醒，免得把原有注释当成新写的
   fileLines.forEach((_, i) => added.add(i + 1));
 } else if (!patch) {
-  // 没有 structuredPatch 的旧版本：按 new_string 在文件里的位置估算
+  // 没有 structuredPatch 的旧版本：按 new_string 在文件里出现的位置估算。
+  // 出现多处时分不清是哪一处（replace_all 时本来就是每一处），全部算上
   const edits = tool === 'MultiEdit' ? ti.edits || [] : tool === 'Edit' ? [ti] : [];
   for (const e of edits) {
     const next = lf(e.new_string || '');
-    const base = next ? current.indexOf(next) : -1;
-    if (base === -1) continue;
-    const first = current.slice(0, base).split('\n').length;
+    if (!next) continue;
     const removed = new Set(lf(e.old_string || '').split('\n').map(squash));
-    next.split('\n').forEach((l, k) => {
-      if (!removed.has(squash(l))) added.add(first + k);
-    });
+    const fresh = next.split('\n').map((l, k) => (removed.has(squash(l)) ? -1 : k)).filter((k) => k !== -1);
+    if (!fresh.length) continue;
+    let line = 1;
+    let from = 0;
+    for (let base = current.indexOf(next); base !== -1; base = current.indexOf(next, base + next.length)) {
+      for (; from < base; from++) if (current.charCodeAt(from) === 10) line++;
+      for (const k of fresh) added.add(line + k);
+    }
   }
 }
 if (!added.size) process.exit(0);

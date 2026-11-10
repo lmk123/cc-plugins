@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // context-keeper 结构检查：把规范里能确定性校验的部分交给脚本，模型只处理需要判断的部分。
-// 无第三方依赖，可以直接复制进项目接 CI。
+// 无第三方依赖。复制进项目接 CI 时连同 lib/ 目录一起复制（import 了 lib/comments.mjs）。
 //
 // 用法：node check.mjs [路径] [--comments] [--json]
 //   路径        只报告该路径下文件的问题（默认整个仓库）
@@ -77,7 +77,7 @@ function readRaw(f) {
   }
 }
 
-// 只缓存 rule、文档、CLAUDE.md 这类会被多处检查读到的小文件，源码不进缓存
+// 只缓存 rule、文档、CLAUDE.md 这类会被多处检查读到的小文件，源码一律用 readRaw 读、不进缓存
 const cache = new Map();
 function read(f) {
   if (!cache.has(f)) cache.set(f, readRaw(f));
@@ -101,7 +101,7 @@ const add = (level, category, file, msg, line) => {
 // ---------- 分类 ----------
 
 const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-const DOC_RE = /(^|\/)\.context\/.+\.md$/i;
+const DOC_RE = /(^|\/)\.context\/.+\.md$/; // 区分大小写：和 scopeOf 的 indexOf、POINTER_RE 口径一致
 const ENTRY_RE = /(^|\/)\.context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
 // 提示文字里的入口路径拆开写，免得脚本复制进项目后把它当成失效指针
 const ENTRY = ['.context', 'README.md'].join('/');
@@ -129,7 +129,7 @@ function scopeFiles(scope) {
 function parseFrontmatter(text) {
   const lines = text.split(/\r?\n/);
   if (lines[0].trim() !== '---') return null;
-  const end = lines.indexOf('---', 1) !== -1 ? lines.indexOf('---', 1) : lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
   if (end === -1) return null;
   const fm = lines.slice(1, end);
   const unq = (s) => s.trim().replace(/^['"]|['"]$/g, '');
@@ -418,34 +418,56 @@ for (const p of ignored([...scopes].map((s) => s + PROBE))) {
 
 // ---------- 指针：失效与孤儿 ----------
 
-const POINTER_RE = /(?<![\w./-])((?:[\w.-]+\/)*\.context\/[\w./-]*?[\w-]\.md)(?![\w.-])/g;
+// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见.context/…"这种紧贴中文的写法也能认出来
+const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*\.context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
 const referenced = new Set(); // 被文档以外的文件指到
 const inEntry = new Set(); // 登记在文档入口里
 const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
+// 指针只认 Claude 会读到的地方：CLAUDE.md、rule、skill、文档、文档入口，以及源码。
+// 其他 Markdown（README、CHANGELOG、对外文档）里的 `.context/…` 多半是示例或历史记录，不算指针
+const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
+const isPointerSource = (f) => MD_SOURCES.has(f) || langFor(f) !== null;
 // 只读含 `.context/` 的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
 function filesMentioningContext() {
   if (IS_GIT) {
     const r = git(['grep', '-lIz', '--untracked', '-F', '-e', '.context/']);
-    if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f));
+    if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f) && isPointerSource(f));
   }
-  return FILES;
+  return FILES.filter(isPointerSource);
+}
+const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
+// 中文正文紧贴路径时（"见包/.context/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
+// 第一段至少留一个字符，免得退化成根作用域的 `.context/`。都不存在时返回 null
+function resolvePointer(p) {
+  for (let q = p; ; q = q.replace(/^[^\x00-\x7f]/u, '')) {
+    if (pointerExists(q)) return q;
+    if (!/^[^\x00-\x7f][^/]/u.test(q)) return null;
+  }
 }
 for (const f of filesMentioningContext()) {
-  const text = read(f);
+  const isMd = MD_SOURCES.has(f);
+  const text = isMd ? read(f) : readRaw(f);
   if (!text || !text.includes('.context/')) continue;
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
+  let fence = false;
   text.split(/\r?\n/).forEach((line, i) => {
-    if (!line.includes('.context/')) return;
+    // Markdown 代码块里的是示例，不算指针
+    if (isMd && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+    if (fence || !line.includes('.context/')) return;
+    const seen = new Set();
     for (const m of line.matchAll(POINTER_RE)) {
-      const p = m[1].replace(/^\.\//, '');
-      if (FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p))) {
+      const raw = m[1].replace(/^\.\//, '');
+      if (seen.has(raw)) continue;
+      seen.add(raw);
+      const p = resolvePointer(raw);
+      if (p) {
         if (!fromDoc) referenced.add(p);
         if (isEntry) inEntry.add(p);
         if (isRootClaude) fromRootClaude.add(p);
       } else {
-        add('error', 'pointer', f, `指针指向不存在的文件 ${p}（指针一律写仓库根起的路径）`, i + 1);
+        add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
     }
   });
