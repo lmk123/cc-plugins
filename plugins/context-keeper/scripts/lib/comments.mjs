@@ -1,5 +1,6 @@
 // 找出源码里"独立成段的长注释块"和带信号词的注释行，供 check.mjs 和 comment-hook.mjs 共用。
-// 只认独立成行的注释，行尾注释、JSDoc/TSDoc、/*! license 块、Rust/C# 的 /// 文档注释一律跳过。
+// 只认独立成行的注释，行尾注释、/*! license 块，以及各语言的 API 文档注释一律跳过：
+// JSDoc/TSDoc（/**）、Rust/C#/Swift/Dart 的 /// 和 //!，Go / Ruby 紧贴在声明前的行注释。
 
 import path from 'node:path';
 
@@ -7,21 +8,24 @@ const SLASH = { line: ['//'], block: true, html: false };
 const HASH = { line: ['#'], block: false, html: false };
 const DASH = { line: ['--'], block: false, html: false };
 const MARKUP = { line: ['//'], block: true, html: true };
+// Go 和 Ruby 没有专门的文档注释语法，紧贴在声明前的行注释就是文档
+const GO = { ...SLASH, docBefore: /^(package|func|type|var|const)\b/ };
+const RUBY = { ...HASH, docBefore: /^(def|class|module|attr_(reader|writer|accessor))\b|^[A-Z]\w*\s*=[^=]/ };
 
 const LANGS = {
   js: SLASH, jsx: SLASH, mjs: SLASH, cjs: SLASH, ts: SLASH, tsx: SLASH, mts: SLASH, cts: SLASH,
   java: SLASH, kt: SLASH, kts: SLASH, scala: SLASH, groovy: SLASH, gradle: SLASH,
   c: SLASH, h: SLASH, cc: SLASH, cpp: SLASH, cxx: SLASH, hpp: SLASH, m: SLASH, mm: SLASH,
-  cs: SLASH, go: SLASH, rs: SLASH, swift: SLASH, dart: SLASH, php: SLASH, zig: SLASH,
+  cs: SLASH, go: GO, rs: SLASH, swift: SLASH, dart: SLASH, php: SLASH, zig: SLASH,
   scss: SLASH, less: SLASH, css: { line: [], block: true, html: false },
-  py: HASH, rb: HASH, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
+  py: HASH, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
   yaml: HASH, yml: HASH, toml: HASH, ex: HASH, exs: HASH, nim: HASH, cr: HASH, tf: HASH,
   sql: DASH, lua: DASH, hs: DASH,
   vue: MARKUP, svelte: MARKUP, astro: MARKUP,
   html: { line: [], block: false, html: true }, htm: { line: [], block: false, html: true },
   xml: { line: [], block: false, html: true },
 };
-const BASENAMES = { Dockerfile: HASH, Makefile: HASH, Rakefile: HASH, Gemfile: HASH };
+const BASENAMES = { Dockerfile: HASH, Makefile: HASH, Rakefile: RUBY, Gemfile: RUBY };
 
 export const MIN_BLOCK_LINES = 5;
 
@@ -42,6 +46,48 @@ function isDirective(body) {
   return /^(eslint|@ts-|prettier-ignore|biome-ignore|istanbul|c8 |type:|noqa|pylint:|mypy:|fmt:|region|endregion|#region|#endregion|-\*-)/i.test(body.trim());
 }
 
+// t 是去掉缩进的一行。以某个注释前缀开头、且是普通注释时返回前缀后的正文，否则返回 null。
+// 第一行的 shebang 不是注释；/// 和 //! 是文档注释。
+function commentBody(t, prefixes, idx) {
+  for (const p of prefixes) {
+    if (!t.startsWith(p)) continue;
+    if (p === '#' && idx === 0 && t.startsWith('#!')) return null;
+    if (p === '//' && /^\/\/[/!]/.test(t)) return null;
+    return t.slice(p.length);
+  }
+  return null;
+}
+
+// 连续的独立行注释，允许中间夹一个空行。返回 [{ items: [{ k, body }], doc }]，k 为 0 起的行下标。
+// 紧贴声明（docBefore）的那一段（不跨空行）单独成一段，标为 doc。
+function lineRuns(lines, lang) {
+  const runs = [];
+  if (!lang.line.length) return runs;
+  const body = (k) => commentBody(lines[k].trimStart(), lang.line, k);
+  let i = 0;
+  while (i < lines.length) {
+    if (body(i) === null) { i++; continue; }
+    const items = [];
+    let seg = i; // 最后一段（不跨空行）的起点
+    let j = i;
+    while (j < lines.length) {
+      const b = body(j);
+      if (b !== null) { items.push({ k: j, body: b }); j++; }
+      else if (lines[j].trim() === '' && j + 1 < lines.length && body(j + 1) !== null) { j++; seg = j; }
+      else break;
+    }
+    const end = items[items.length - 1].k;
+    const next = lines[end + 1];
+    const docFrom = lang.docBefore && next !== undefined && lang.docBefore.test(next.trimStart()) ? seg : end + 1;
+    const plain = items.filter((x) => x.k < docFrom);
+    const doc = items.filter((x) => x.k >= docFrom);
+    if (plain.length) runs.push({ items: plain, doc: false });
+    if (doc.length) runs.push({ items: doc, doc: true });
+    i = end + 1;
+  }
+  return runs;
+}
+
 // 返回 [{ start, end, lines, text, kind }]，start/end 为 1 起的行号（相对 text）
 export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   const lang = langFor(file);
@@ -49,43 +95,15 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   const lines = text.split(/\r?\n/);
   const blocks = [];
 
-  // 1. 连续的独立行注释，允许中间夹一个空行
-  if (lang.line.length) {
-    const prefixes = lang.line;
-    const lineComment = (l) => {
-      const t = l.trimStart();
-      for (const p of prefixes) {
-        if (!t.startsWith(p)) continue;
-        if (p === '#' && /^#(!|\[|include|define|pragma|if|endif|else|elif|undef|import)/.test(t)) return null;
-        if (p === '//' && /^\/\/[/!]/.test(t)) return null; // /// 和 //! 是文档注释
-        return t.slice(p.length);
-      }
-      return null;
-    };
-    let i = 0;
-    while (i < lines.length) {
-      if (lineComment(lines[i]) === null) { i++; continue; }
-      const start = i;
-      let end = i;
-      let count = 0;
-      const bodies = [];
-      let j = i;
-      while (j < lines.length) {
-        const body = lineComment(lines[j]);
-        if (body !== null) {
-          bodies.push(body);
-          count++;
-          end = j;
-          j++;
-        } else if (lines[j].trim() === '' && j + 1 < lines.length && lineComment(lines[j + 1]) !== null) {
-          j++;
-        } else break;
-      }
-      const textBody = bodies.join('\n');
-      if (count >= minLines && !bodies.every(isDirective) && !(start <= 2 && isLicense(textBody))) {
-        blocks.push({ start: start + 1, end: end + 1, lines: count, text: textBody, kind: 'line' });
-      }
-      i = end + 1;
+  // 1. 连续的独立行注释
+  for (const run of lineRuns(lines, lang)) {
+    if (run.doc) continue;
+    const bodies = run.items.map((x) => x.body);
+    const start = run.items[0].k;
+    const end = run.items[run.items.length - 1].k;
+    const textBody = bodies.join('\n');
+    if (bodies.length >= minLines && !bodies.every(isDirective) && !(start <= 2 && isLicense(textBody))) {
+      blocks.push({ start: start + 1, end: end + 1, lines: bodies.length, text: textBody, kind: 'line' });
     }
   }
 
@@ -119,22 +137,29 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
 export function findSignalComments(text, file) {
   const lang = langFor(file);
   if (!lang) return [];
+  const lines = text.split(/\r?\n/);
+  const docLines = new Set(lineRuns(lines, lang).filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
   const prefixes = [...lang.line];
-  if (lang.block) prefixes.push('/*', '*');
+  if (lang.block) prefixes.push('/*');
   if (lang.html) prefixes.push('<!--');
   const out = [];
-  // 跟踪是否在 /* */ 里：JSDoc（/**）和 /*! 整块跳过；`* ` 开头的行只在块注释内才算注释
-  let block = null; // null | 'doc' | 'plain'
-  text.split(/\r?\n/).forEach((l, idx) => {
+  const hit = (idx, t, body) => {
+    if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
+  };
+  // 跟踪是否在多行注释里：JSDoc（/**）和 /*! 整块跳过；`* ` 开头的行只在块注释内才算注释
+  let block = null; // null | 'doc' | 'plain' | 'html'
+  lines.forEach((l, idx) => {
     const t = l.trimStart();
+    if (block === 'html') {
+      if (t.includes('-->')) block = null;
+      hit(idx, t, t);
+      return;
+    }
     if (block) {
       const inDoc = block === 'doc';
       if (t.includes('*/')) block = null;
       if (inDoc) return;
-      if (/^\*(\s|$)/.test(t) || !t.startsWith('*')) {
-        const body = t.replace(/^\*/, '');
-        if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
-      }
+      if (/^\*(\s|$)/.test(t) || !t.startsWith('*')) hit(idx, t, t.replace(/^\*/, ''));
       return;
     }
     if (lang.block && t.startsWith('/*')) {
@@ -142,12 +167,10 @@ export function findSignalComments(text, file) {
       if (!t.includes('*/', 2)) block = isDoc ? 'doc' : 'plain';
       if (isDoc) return;
     }
-    const p = prefixes.find((x) => x !== '*' && t.startsWith(x));
-    if (!p) return;
-    if (p === '#' && /^#(!|\[|include|define|pragma)/.test(t)) return;
-    if (p === '//' && /^\/\/[/!]/.test(t)) return; // /// 和 //! 是文档注释
-    const body = t.slice(p.length);
-    if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
+    if (lang.html && t.startsWith('<!--') && !t.includes('-->', 4)) block = 'html';
+    if (docLines.has(idx)) return;
+    const body = commentBody(t, prefixes, idx);
+    if (body !== null) hit(idx, t, body);
   });
   return out;
 }

@@ -65,25 +65,30 @@ if (target) {
 }
 const inScope = (f) => !FILTER || f === FILTER || f.startsWith(FILTER);
 
-const cache = new Map();
-function read(f) {
-  if (cache.has(f)) return cache.get(f);
-  let t = null;
+// 读文本文件；超过 1MB 或是二进制的返回 null
+function readRaw(f) {
   try {
     const full = path.join(ROOT, f);
-    if (fs.statSync(full).size <= 1 << 20) {
-      const buf = fs.readFileSync(full);
-      if (!buf.subarray(0, 8000).includes(0)) t = buf.toString('utf8');
-    }
-  } catch {}
-  cache.set(f, t);
-  return t;
+    if (fs.statSync(full).size > 1 << 20) return null;
+    const buf = fs.readFileSync(full);
+    return buf.subarray(0, 8000).includes(0) ? null : buf.toString('utf8');
+  } catch {
+    return null;
+  }
 }
 
+// 只缓存 rule、文档、CLAUDE.md 这类会被多处检查读到的小文件，源码不进缓存
+const cache = new Map();
+function read(f) {
+  if (!cache.has(f)) cache.set(f, readRaw(f));
+  return cache.get(f);
+}
+
+// -z：不加的话非 ASCII 路径会被 git 转义成 "\345\214\205/..." 这种形式
 function ignored(paths) {
   if (!IS_GIT || !paths.length) return new Set();
-  const r = git(['check-ignore', '--stdin'], { input: paths.join('\n') });
-  return new Set(r.stdout.split('\n').filter(Boolean));
+  const r = git(['check-ignore', '-z', '--stdin'], { input: paths.join('\0') });
+  return new Set(r.stdout.split('\0').filter(Boolean));
 }
 
 // ---------- 结果收集 ----------
@@ -163,12 +168,21 @@ function splitTopLevel(s) {
   return out.map((x) => x.trim()).filter(Boolean);
 }
 
+// 展开第一组花括号（按深度找配对的 `}`，支持嵌套），再递归展开剩下的
 function expandBraces(p, budget = { n: 1000 }) {
-  const m = p.match(/^([^{]*)\{([^}]+)\}(.*)$/);
-  if (!m) return [p];
-  const parts = m[2].split(',').map((x) => x.trim());
-  if ((budget.n -= parts.length) < 0) return [p];
-  return parts.flatMap((x) => expandBraces(m[1] + x + m[3], budget));
+  const open = p.indexOf('{');
+  if (open === -1) return [p];
+  let close = -1;
+  for (let i = open, depth = 0; i < p.length; i++) {
+    if (p[i] === '{') depth++;
+    else if (p[i] === '}' && --depth === 0) { close = i; break; }
+  }
+  if (close === -1) return [p];
+  const parts = splitTopLevel(p.slice(open + 1, close));
+  if (!parts.length || (budget.n -= parts.length) < 0) return [p];
+  const head = p.slice(0, open);
+  const tail = p.slice(close + 1);
+  return parts.flatMap((x) => expandBraces(head + x + tail, budget));
 }
 
 function expandPaths(items) {
@@ -230,11 +244,15 @@ function globBody(g) {
   return re;
 }
 
-const staticPrefix = (glob) => {
-  const segs = glob.replace(/^\//, '').split('/');
-  const idx = segs.findIndex((s) => /[*?{[]/.test(s));
-  return segs.slice(0, idx === -1 ? segs.length : idx).join('/');
-};
+// 按 glob 造一个它会匹配到的示例路径，用来问 git 这类文件是否被忽略。
+// `**/*.pb.go` → `__probe__.pb.go`，`dist/**/*.js` → `dist/__probe__.js`
+const sampleOf = (glob) => glob
+  .replace(/^\/+|\/+$/g, '')
+  .replace(/(^|\/)\*\*\//g, '$1')
+  .replace(/\*+/g, '__probe__')
+  .replace(/\?/g, '_')
+  .replace(/\[([^\]]*)\]/g, (_, cls) => (/^[!^]/.test(cls) || !cls ? '_' : cls[0]))
+  .replace(/[{}]/g, '') || '__probe__';
 
 // 一碰就全中的写法：通配整个作用域，或通配 src/、packages/ 这类容器目录（`src/*` 按 gitignore 语义等于整个 src/）。
 // `api/**` 这种领域级目录不算，交给下面按匹配比例判断。
@@ -246,6 +264,7 @@ const isBroadPattern = (g) => {
 
 // ---------- rules ----------
 
+const unmatched = []; // 匹配不到文件、要问 git 是否指向被忽略路径的 glob，最后一次性查
 for (const rule of rules) {
   const text = read(rule);
   if (text === null) continue;
@@ -287,10 +306,10 @@ for (const rule of rules) {
         add('error', 'rule', rule, `paths ${label} 以 ./ 开头：Claude Code 按 gitignore 语义匹配，这样写匹配不到文件，去掉 ./`);
       } else if (scope && glob.replace(/^\//, '').startsWith(scope)) {
         add('error', 'rule', rule, `paths ${label} 写成了从仓库根算起的路径；包内 rule 的 glob 相对 ${scope} 写`);
-      } else if (ignored([`${scope}${staticPrefix(glob) || '.'}/__probe__`]).size) {
-        add('warn', 'rule', rule, `paths ${label} 指向被 .gitignore 忽略的路径（以${scopeLabel}为基准），人工核对它与生成脚本的输出一致`);
       } else {
-        add('error', 'rule', rule, `paths ${label} 匹配不到任何现存文件（以${scopeLabel}为基准）`);
+        // glob 可能指向文件本身（`*.pb.go`）或整个目录（`dist`），两种都问
+        const sample = `${scope}${sampleOf(glob)}`;
+        unmatched.push({ rule, label, scopeLabel, probes: [sample, `${sample}/__probe__`] });
       }
       continue;
     }
@@ -299,6 +318,14 @@ for (const rule of rules) {
     } else if (sf.length >= 20 && matched.length / sf.length >= 0.5) {
       add('warn', 'rule', rule, `paths ${label} 过宽：匹配了作用域里 ${matched.length}/${sf.length} 个文件，起不到过滤作用`);
     }
+  }
+}
+const ignoredProbes = ignored(unmatched.flatMap((u) => u.probes));
+for (const { rule, label, scopeLabel, probes } of unmatched) {
+  if (probes.some((p) => ignoredProbes.has(p))) {
+    add('warn', 'rule', rule, `paths ${label} 指向被 .gitignore 忽略的路径（以${scopeLabel}为基准），人工核对它与生成脚本的输出一致`);
+  } else {
+    add('error', 'rule', rule, `paths ${label} 匹配不到任何现存文件（以${scopeLabel}为基准）`);
   }
 }
 
@@ -342,7 +369,8 @@ for (const f of claudeMds) {
   const text = read(f);
   if (text === null) continue;
   const lines = text.split(/\r?\n/);
-  claudeMdStats.push({ file: f, lines: lines.length });
+  // 以换行结尾时 split 会多出一个空串，和 wc -l 对齐
+  claudeMdStats.push({ file: f, lines: text ? lines.length - (/\n$/.test(text) ? 1 : 0) : 0 });
   let fence = false;
   lines.forEach((line, i) => {
     if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
@@ -394,8 +422,15 @@ const POINTER_RE = /(?<![\w./-])((?:[\w.-]+\/)*\.context\/[\w./-]*?[\w-]\.md)(?!
 const referenced = new Set(); // 被文档以外的文件指到
 const inEntry = new Set(); // 登记在文档入口里
 const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
-for (const f of FILES) {
-  if (/(^|\/)\.git\//.test(f)) continue;
+// 只读含 `.context/` 的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
+function filesMentioningContext() {
+  if (IS_GIT) {
+    const r = git(['grep', '-lIz', '--untracked', '-F', '-e', '.context/']);
+    if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f));
+  }
+  return FILES;
+}
+for (const f of filesMentioningContext()) {
   const text = read(f);
   if (!text || !text.includes('.context/')) continue;
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
@@ -450,7 +485,7 @@ if (WANT_COMMENTS) {
   for (const f of FILES) {
     if (!inScope(f) || !langFor(f) || /(^|\/)(\.context|\.claude)\//.test(f)) continue;
     if (f.split('/').some((s) => SKIP_DIRS.has(s))) continue;
-    const text = read(f);
+    const text = readRaw(f);
     if (!text) continue;
     for (const b of findCommentBlocks(text, f)) {
       add('info', 'comment-block', f, `${b.lines} 行的注释块（第 ${b.start}–${b.end} 行）`, b.start);
