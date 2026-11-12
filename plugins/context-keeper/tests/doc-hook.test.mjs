@@ -26,6 +26,17 @@ test('别的文档里的互相引用、普通 Markdown 里的示例不列', () =
   assert.doesNotMatch(msg, /- README\.md/);
 });
 
+test('Markdown 代码块里的示例、源码字符串里的路径不列', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    '.claude/rules/api/example.md': `---\npaths:\n  - "src/api/*.ts"\n---\n\n示例写法：\n\`\`\`\n// 改重试前读 ${DOC}\n\`\`\`\n`,
+    'tests/fixture.test.ts': `const DOC = '${DOC}';\n`,
+  }), { file: DOC });
+  assert.match(msg, /src\/api\/retry\.ts:1/);
+  assert.doesNotMatch(msg, /example\.md/);
+  assert.doesNotMatch(msg, /fixture\.test\.ts/);
+});
+
 test('没有任何一处指到的文档、文档入口、不是文档的文件不提醒', () => {
   const t = makeRepo({ ...REPO, '.context/api/unused.md': '# 没人指\n' });
   assert.equal(docHook(t, { file: '.context/api/unused.md', tool: 'Write' }), null);

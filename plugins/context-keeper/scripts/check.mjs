@@ -13,7 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
-import { commentLines, pointersIn, resolvePointer as resolveWith, TRIGGER_RE } from './lib/pointers.mjs';
+import {
+  CLAUDE_MD_RE, DOC_RE, ENTRY_RE, MARKDOWN_RE, RULE_RE, SKILL_RE,
+  commentLines, inComment, pointersIn, proseLines, resolvePointer as resolveWith, TRIGGER_RE,
+} from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.includes('-h') || argv.includes('--help')) {
@@ -95,17 +98,6 @@ function ignored(paths) {
   return new Set(r.stdout.split('\0').filter(Boolean));
 }
 
-// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认围栏
-function proseLines(text, plain = false) {
-  const out = [];
-  let fence = false;
-  text.split(/\r?\n/).forEach((line, i) => {
-    if (!plain && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
-    if (!fence) out.push([line, i]);
-  });
-  return out;
-}
-
 // ---------- 结果收集 ----------
 
 const findings = [];
@@ -115,14 +107,10 @@ const add = (level, category, file, msg, line) => {
 
 // ---------- 分类 ----------
 
-const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-const DOC_RE = /(^|\/)\.context\/.+\.md$/; // 区分大小写：和 scopeOf 的 indexOf、POINTER_RE 口径一致
-const ENTRY_RE = /(^|\/)\.context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+// RULE_RE、DOC_RE、ENTRY_RE、CLAUDE_MD_RE、SKILL_RE 在 lib/pointers.mjs 里，和 doc-hook 共用。DOC_RE 区分大小写，和 scopeOf 的 indexOf 口径一致
 // 提示文字里的入口路径拆开写，免得脚本复制进项目后把它当成失效指针
 const ENTRY = ['.context', 'README.md'].join('/');
-const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 const ROOT_CLAUDE_MD = new Set(['CLAUDE.md', '.claude/CLAUDE.md']);
-const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 const INDEX_RULE_RE = /(^|\/)\.claude\/rules\/[^/]+\/context-index\.md$/;
 const RULE_MAX_LINES = 10;
 
@@ -496,7 +484,7 @@ const fromClaudeMd = new Set(); // 被 CLAUDE.md 里某一行指到（不含个�
 // 扩展名表里没有的非 Markdown 文件（表不可能列全所有能写注释的格式）只认里面指得到文档的路径，算作已登记；
 // 指不到的不报失效、也不查写法：这类文件里的路径可能只是数据
 const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
-const isPointerSource = (f) => MD_SOURCES.has(f) || !/\.(md|mdx|markdown)$/i.test(f);
+const isPointerSource = (f) => MD_SOURCES.has(f) || !MARKDOWN_RE.test(f);
 // 一行是不是独立成行的注释（粗略，按常见注释前缀认）
 const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/;
 // 只读含 `.context/` 的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
@@ -518,18 +506,22 @@ const NUMBER_RE = /(?<![A-Za-z\d/_-])\d/;
 // 引出登记行的话（"api 相关的项目文档，改动前按需读："）：提到文档、以冒号或"按需读"结尾、本身不带结论。
 // 按"提到文档"来认，不按"以冒号结尾"来认："网关连续失败会封 IP，细节："这种结论也以冒号结尾
 const DOC_WORD_RE = /文档|资料|参考|详见|背景|\b(?:docs?|documents?|documentation|references?|see also|background)\b/i;
-const introducesDocs = (t) => DOC_WORD_RE.test(t) && !CONSTRAINT_RE.test(t) && !NUMBER_RE.test(t);
+// "以下 2 份文档""3 docs" 数的是文档本身，不是结论里的数字
+const DOC_COUNT_RE = /\d+\s*(?:份|篇)|\d+\s*(?:个|条|项)(?=[^，。；：,;:]{0,6}(?:文档|资料|参考))|\b\d+\s+(?:docs?|documents?|references?)\b/gi;
+const introducesDocs = (t) => DOC_WORD_RE.test(t) && !CONSTRAINT_RE.test(t) && !NUMBER_RE.test(t.replace(DOC_COUNT_RE, ''));
 // 标题、表格行和引出登记行的话：不是重点，也不是折行登记行的上半句
 function isLead(line) {
   const t = line.trim();
   return /^[#|]/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
 }
-// 一段文字只是文档标题（"重试策略"），还是重点（"重试上限 3""网关会封 IP"）：标题不带句内标点、数字、约束词和"会 …"
-// （会话、机会这类词里的不算）
-const WILL_RE = /(?<![机社协学体约聚开])会(?![话员议计])/;
+// 一段文字只是文档标题（"重试策略"），还是重点（"重试上限 3""网关会封 IP"）：标题不带句内标点、数字、约束词和"会 …"。
+// 含"会"的常见名词（会话、机会、年会、大会……）先去掉，剩下的"会"才算"会 …"。年、大、工和"会"连着时也常是
+// "每年会""量大会""员工会"，要再看前面一个字
+const HUI_NOUN_RE = /(?:机|社|协|学|体|约|聚|开|晚|宴|舞|例|峰|茶|酒|庙|盛|商|教|帮|展|省|议|公|博览|理事|委员|董事|股东|(?<![每今明去])年|(?<![量很太较更最过])大|(?<![员职])工)会|会(?:话|员|议|计|场|谈|面|签|诊|合|务|所|长|期|费|展|籍)/g;
+const hasWill = (t) => t.replace(HUI_NOUN_RE, '').includes('会');
 function isTitle(s) {
   const t = s.replace(/[`*_]/g, '').trim().replace(/[：:]$/, '');
-  return !/[，。；：,;:!?！？]|\.(?:\s|$)/.test(t) && !NUMBER_RE.test(t) && !CONSTRAINT_RE.test(t) && !WILL_RE.test(t);
+  return !/[，。；：,;:!?！？]|\.(?:\s|$)/.test(t) && !NUMBER_RE.test(t) && !CONSTRAINT_RE.test(t) && !hasWill(t);
 }
 // 登记行的重点有没有写在路径前面（「重点。改 X 前读 路径」）。认得出的是路径打头的行：路径前面只剩列表符号、
 // 引号、表格竖线这类标记，或者只有文档标题（`[标题](路径)` 的链接文字、单独一段加粗；写的是重点时不算）。
@@ -553,6 +545,7 @@ function carriesHead(prev) {
 }
 // rule 正文里除了指针行、标题和引出登记行的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
 // 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算。
+// 折行登记行的上半句不是重点（单独一行的标题"- 重试策略"，下一行接着写路径）时，和领域索引里一样算登记行的一部分。
 // 表格只有表头和分隔行不算，不带指针的数据行是正文
 const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
 function hasOwnContent(text) {
@@ -566,6 +559,8 @@ function hasOwnContent(text) {
     afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
     if (afterPointer) return false;
     if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
+    const next = lines[i + 1] || '';
+    if (pointersIn(next).length && !LIST_ITEM_RE.test(next)) return carriesHead(l);
     return !isLead(l);
   });
 }
@@ -585,13 +580,12 @@ for (const f of filesMentioningContext()) {
   // 指得到文档的照样算已登记，指不到的不报失效、也不查写法
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
-  const TRAILING_COMMENT_RE = /(?:^|\s)(?:\/\/|\/\*|#|--|<!--)/; // 行尾注释：指针前面有注释符
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
   const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text)));
   prose.forEach(([line, i], k) => {
     const found = pointersIn(line);
     if (!found.length) return;
-    const strict = known && (isMd || cm[i] || TRAILING_COMMENT_RE.test(line.slice(0, line.indexOf(found[0]))));
+    const strict = known && (isMd || inComment(line, i, cm, found[0]));
     // 只删指针路径本身：中文正文和路径之间往往没有空格，按"删到下一个空白为止"会把后面的触发条件一起删掉
     let own = line;
     for (const raw of found) own = own.split(raw).join('');

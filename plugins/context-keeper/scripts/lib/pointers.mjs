@@ -1,5 +1,51 @@
-// 指向 .context/ 文档的指针，供 check.mjs 和 pointer-guard.mjs 共用。
+// 指向 .context/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
 // 指针一律写仓库根起的路径（`<作用域>/.context/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+// ---------- 文件分类：哪些文件里的路径算指针 ----------
+
+export const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
+export const DOC_RE = /(^|\/)\.context\/.+\.md$/; // 区分大小写：和 POINTER_RE 口径一致
+export const ENTRY_RE = /(^|\/)\.context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+export const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
+export const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
+export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
+// 指针只认 Claude 会读到的 Markdown：CLAUDE.md、rule、skill、文档入口（文档之间的互相引用另算），以及非 Markdown 文件。
+// 其他 Markdown（README、CHANGELOG、对外文档）里的路径多半是示例或历史记录，不算指针
+export const isPointerMarkdown = (f) => RULE_RE.test(f) || ENTRY_RE.test(f) || CLAUDE_MD_RE.test(f) || SKILL_RE.test(f);
+
+// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认围栏
+export function proseLines(text, plain = false) {
+  const out = [];
+  let fence = false;
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!plain && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+    if (!fence) out.push([line, i]);
+  });
+  return out;
+}
+
+// 源码里的指针是不是写在注释里：所在行是注释（comment 是 commentLines 的结果），或者是行尾注释（指针前面有注释符）。
+// 字符串里的路径（输出文件名、测试数据）不是写给人看的指针
+const TRAILING_COMMENT_RE = /(?:^|\s)(?:\/\/|\/\*|#|--|<!--)/;
+export const inComment = (line, i, comment, raw) => comment[i] || TRAILING_COMMENT_RE.test(line.slice(0, line.indexOf(raw)));
+
+// 项目根取离文件最近的 .git（worktree 里是 .git 文件）。不是 git 仓库时用 base（启动会话的目录），
+// 文件不在它下面时返回 null：指针是项目根起的路径，没有根就解析不了
+export function findRoot(file, base) {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    if (path.dirname(dir) === dir) break;
+  }
+  if (!base) return null;
+  const inside = path.relative(path.resolve(base), file);
+  if (inside.startsWith('..') || path.isAbsolute(inside)) return null;
+  return path.resolve(base);
+}
+
+// ---------- 指针 ----------
 
 // 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见.context/…"这种紧贴中文的写法也能认出来
 export const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*\.context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;

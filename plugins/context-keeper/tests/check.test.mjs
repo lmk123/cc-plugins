@@ -221,6 +221,32 @@ test('链接文字、加粗里写的是重点时不报没有重点，是标题�
   ]), [4, 5]);
 });
 
+test('引出列表的话里数的是文档份数时照样算引言，下一行路径打头的照报', () => {
+  assert.deepEqual(bareLinesOf([
+    '以下 2 份 api 文档，改动前按需读：',
+    '`.context/api/retry-policy.md`：改重试次数前',
+  ]), [2]);
+});
+
+test('含"会"的名词（年会、大会）当标题，"会 …"（每年会、网关会）当重点', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '- [年会抽奖](.context/api/retry-policy.md)：改重试次数前',
+    '- **大会报名** `.context/payment/installments.md`：新增错误码前',
+    '- [每年会清理一次](.context/api/retry-policy.md)：改重试次数前读',
+    '- **网关会封 IP** `.context/api/retry-policy.md`：改重试次数前读',
+  ]), [2, 3]);
+});
+
+test('正文只有指针的 rule：单独一行的标题、下一行接着写路径的，和领域索引里一样报', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/retry.md': '---\npaths:\n  - "src/api/*.ts"\n---\n\n- 重试策略\n  `.context/api/retry-policy.md`：改重试次数前\n',
+  }));
+  assert.ok(r.findings.some((f) => f.file.endsWith('retry.md') && f.line === 7 && /没有重点/.test(f.msg)));
+});
+
 test('指向另一个文档入口的登记行不报没有重点', () => {
   const r = check(makeRepo({
     ...CLEAN,

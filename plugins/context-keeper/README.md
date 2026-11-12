@@ -49,7 +49,7 @@ const MAX_RETRY = 3;
 - `record-context`：要记一条项目知识时，决定它写到哪里，按模板写入，并登记进对应入口。
 - 根 CLAUDE.md 的「更多上下文」索引里有一行常驻的写入约定，让 Claude 默认不把背景写成长注释或只记在自动记忆里。
 - comment hook（PostToolUse）：Claude 写入 4 行以上的独立注释块时，提醒它注释只留一句重点，扩展内容进 `.context/`、原处留指针。只提醒、不阻断，JSDoc、license、行尾注释不算。设环境变量 `CONTEXT_KEEPER_COMMENT_HOOK=0` 可关闭。
-- doc hook（PostToolUse）：Claude 改了 `.context/` 里的文档之后，列出指到这份文档的行（领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码里的指针），提醒它：文档里的结论变了，这些行里的重点在同一次改动里跟着改。只提醒、不阻断；没有任何一处指到的文档不提醒，不是 git 仓库的项目也不提醒。设环境变量 `CONTEXT_KEEPER_DOC_HOOK=0` 可关闭。
+- doc hook（PostToolUse）：Claude 改了 `.context/` 里的文档之后，列出指到这份文档的行（领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码注释里的指针，代码块里的示例、源码字符串里的路径不算），提醒它：文档里的结论变了，这些行里的重点在同一次改动里跟着改。只提醒、不阻断；没有任何一处指到的文档不提醒，不是 git 仓库的项目也不提醒。设环境变量 `CONTEXT_KEEPER_DOC_HOOK=0` 可关闭。
 
 **读取端**
 

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { commentLines, pointersIn, resolvePointer } from './lib/pointers.mjs';
+import { commentLines, findRoot, pointersIn, resolvePointer } from './lib/pointers.mjs';
 
 if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
 
@@ -43,19 +43,10 @@ const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
 // 不按扩展名表筛：表里没有的格式（.proto、.graphql……）照样能写注释指针。没有指针的文件下面自然放行
 if (/\.(md|mdx|markdown)$/i.test(file)) process.exit(0);
 
-// 项目根取离文件最近的 .git（worktree 里是 .git 文件）。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里
-// 也是拿运行目录当根），文件不在它下面就不管：指针是项目根起的路径，没有根就解析不了
-let root = null;
-for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
-  if (fs.existsSync(path.join(dir, '.git'))) { root = dir; break; }
-  if (path.dirname(dir) === dir) break;
-}
-if (!root) {
-  const base = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-  const inside = base ? path.relative(path.resolve(base), file) : '..';
-  if (inside.startsWith('..') || path.isAbsolute(inside)) process.exit(0);
-  root = path.resolve(base);
-}
+// 项目根取离文件最近的 .git。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里也是拿运行目录当根），
+// 文件不在它下面就不管
+const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
+if (!root) process.exit(0);
 if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');

@@ -36,7 +36,7 @@
           },
           {
             "type": "command",
-            "command": "command -v node >/dev/null 2>&1 && node \"${CLAUDE_PLUGIN_ROOT}/scripts/doc-hook.mjs\" || true",
+            "command": "command -v node >/dev/null 2>&1 && { i=$(cat); case \"$i\" in *.context*) printf '%s' \"$i\" | node \"${CLAUDE_PLUGIN_ROOT}/scripts/doc-hook.mjs\";; esac; } || true",
             "timeout": 10
           }
         ]
