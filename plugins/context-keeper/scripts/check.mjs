@@ -509,6 +509,21 @@ function filesMentioningContext() {
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
+// 登记行有没有重点，只认得出最常见的一种没有：路径打头（"- `路径`：改 X 前"），前面没有任何话。
+// 重点写在路径前面（「重点。改 X 前读 路径」），所以路径前面只剩列表符号、反引号的就是没写。
+// 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算
+function pathFirst(line, raw) {
+  const head = line.slice(0, line.indexOf(raw)).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/[\s`*_"'“”‘’「」《》<(（[]/g, '').replace(/^\.\/$/, '');
+  return head === '' && resolvePointer(raw) === raw;
+}
+// rule 正文里除了指针行、"……："这种引出列表的行和标题，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报
+function hasOwnContent(text) {
+  const fm = parseFrontmatter(text);
+  return (fm ? fm.body : text.split(/\r?\n/)).some((l) => {
+    const t = l.trim();
+    return t && !/^#/.test(t) && !/[：:]$/.test(t) && !pointersIn(l).length;
+  });
+}
 for (const f of filesMentioningContext()) {
   const isMd = MD_SOURCES.has(f);
   const text = isMd ? read(f) : readRaw(f);
@@ -526,6 +541,8 @@ for (const f of filesMentioningContext()) {
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
   const TRAILING_COMMENT_RE = /(?:^|\s)(?:\/\/|\/\*|#|--|<!--)/; // 行尾注释：指针前面有注释符
+  // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
+  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text)));
   prose.forEach(([line, i], k) => {
     const found = pointersIn(line);
     if (!found.length) return;
@@ -540,6 +557,8 @@ for (const f of filesMentioningContext()) {
     const near = separate || pointersIn(prev).length ? own : `${prev}\n${own}`;
     if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
+    } else if (bareLines && pathFirst(line, found[0])) {
+      add('info', 'pointer-style', f, '登记行只有路径和什么时候读，没有重点：Claude 要读完整份文档才拿得到重点，这一行进了 context 等于什么都没给。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」）；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
     }
     for (const raw of found) {
       const p = resolvePointer(raw);

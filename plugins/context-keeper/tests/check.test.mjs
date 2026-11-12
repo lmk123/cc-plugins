@@ -6,7 +6,7 @@ const has = (r, category, re) => r.findings.some((f) => f.category === category 
 
 const CLEAN = {
   'CLAUDE.md': '# 项目\n\n## 更多上下文\n- 做新需求、评估方案前，先看 `.context/README.md`：评估过但没做的需求\n',
-  '.context/README.md': '# 项目文档入口\n\n- `.context/payment/installments.md`：要做分期付款前\n',
+  '.context/README.md': '# 项目文档入口\n\n- 分期付款评估过，没做：渠道不支持。要做分期付款前读 `.context/payment/installments.md`\n',
   '.context/payment/installments.md': '# 分期付款\n',
   '.context/api/retry-policy.md': '# 重试策略\n',
   '.claude/rules/styling/tokens.md': '---\npaths:\n  - "src/styles/*.css"\n---\n\n改 token 后必须跑 `pnpm tokens:build`。\n',
@@ -64,6 +64,34 @@ test('只匹配一个生成物或 lockfile 的 rule 不报单文件 rule', () =>
 test('没写什么时候读的指针给提示', () => {
   const r = check(makeRepo({ ...CLEAN, 'src/api/retry.ts': '// 重试上限 3，原因见 .context/api/retry-policy.md\nconst MAX_RETRY = 3;\n' }));
   assert.ok(has(r, 'pointer-style'));
+});
+
+test('没有重点的登记行给提示：文档入口、领域索引 rule、正文只有指针的 rule', () => {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const bare = '- `.context/api/retry-policy.md`：改重试次数前（事故经过）\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    '.context/README.md': '# 项目文档入口\n\n- `.context/payment/installments.md`：要做分期付款前\n',
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/context-index.md': `${fm}api 相关的项目文档，改动前按需读：\n${bare}`,
+    '.claude/rules/api/pointer-only.md': `${fm}重试相关的项目文档，改动前按需读：\n\n${bare}`,
+  }));
+  const hit = (name) => r.findings.some((f) => f.file.endsWith(name) && f.category === 'pointer-style' && /没有重点/.test(f.msg));
+  assert.ok(hit('README.md'));
+  assert.ok(hit('context-index.md'));
+  assert.ok(hit('pointer-only.md'));
+  assert.equal(r.status, 0);
+});
+
+test('带重点的登记行、以什么时候读开头的登记行、正文另有内容的 rule 不报没有重点', () => {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/context-index.md': `${fm}api 相关的项目文档：\n- 网关连续 5 次失败封 IP。改重试次数前读 \`.context/api/retry-policy.md\`（事故经过）\n- 新增错误码前读 \`.context/payment/installments.md\`\n`,
+    '.claude/rules/api/retry.md': `${fm}重试上限不能超过 3：网关会封 IP。\n\`.context/api/retry-policy.md\`：改重试次数前读\n`,
+  }));
+  assert.deepEqual(r.findings, []);
 });
 
 test('孤儿文档、没被根 CLAUDE.md 指到的入口', () => {
