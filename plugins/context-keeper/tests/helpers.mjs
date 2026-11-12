@@ -76,6 +76,19 @@ export function commentHook(t, { file, tool = 'Write', response }) {
   return out ? out.additionalContext : null;
 }
 
+// 模拟 Write / Edit 改了文档之后触发 doc-hook。返回提醒文字，没提醒时返回 null
+// session 不传时 hook 拿不到会话 id，不记状态，每次都给完整清单
+export function docHook(t, { file, tool = 'Edit', env, session, agent }) {
+  const out = run('doc-hook.mjs', {
+    ...(session ? { session_id: session } : {}),
+    ...(agent ? { agent_id: agent } : {}),
+    cwd: t.repo,
+    tool_name: tool,
+    tool_input: { file_path: path.join(t.repo, file) },
+  }, { tmp: t.tmp, env });
+  return out ? out.additionalContext : null;
+}
+
 export function check(t, args = []) {
   const r = spawnSync('node', [path.join(SCRIPTS, 'check.mjs'), ...args, '--json'], { cwd: t.repo, encoding: 'utf8' });
   return { status: r.status, ...JSON.parse(r.stdout) };

@@ -13,7 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
-import { commentLines, pointersIn, resolvePointer as resolveWith, TRIGGER_RE } from './lib/pointers.mjs';
+import {
+  CLAUDE_MD_RE, DOC_RE, ENTRY_RE, MARKDOWN_RE, RULE_RE, SKILL_RE,
+  commentLines, inComment, pointersIn, proseLines, resolvePointer as resolveWith, TRIGGER_RE,
+} from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.includes('-h') || argv.includes('--help')) {
@@ -95,17 +98,6 @@ function ignored(paths) {
   return new Set(r.stdout.split('\0').filter(Boolean));
 }
 
-// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认围栏
-function proseLines(text, plain = false) {
-  const out = [];
-  let fence = false;
-  text.split(/\r?\n/).forEach((line, i) => {
-    if (!plain && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
-    if (!fence) out.push([line, i]);
-  });
-  return out;
-}
-
 // ---------- 结果收集 ----------
 
 const findings = [];
@@ -115,14 +107,10 @@ const add = (level, category, file, msg, line) => {
 
 // ---------- 分类 ----------
 
-const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-const DOC_RE = /(^|\/)\.context\/.+\.md$/; // 区分大小写：和 scopeOf 的 indexOf、POINTER_RE 口径一致
-const ENTRY_RE = /(^|\/)\.context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+// RULE_RE、DOC_RE、ENTRY_RE、CLAUDE_MD_RE、SKILL_RE 在 lib/pointers.mjs 里，和 doc-hook 共用。DOC_RE 区分大小写，和 scopeOf 的 indexOf 口径一致
 // 提示文字里的入口路径拆开写，免得脚本复制进项目后把它当成失效指针
 const ENTRY = ['.context', 'README.md'].join('/');
-const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 const ROOT_CLAUDE_MD = new Set(['CLAUDE.md', '.claude/CLAUDE.md']);
-const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 const INDEX_RULE_RE = /(^|\/)\.claude\/rules\/[^/]+\/context-index\.md$/;
 const RULE_MAX_LINES = 10;
 
@@ -496,7 +484,7 @@ const fromClaudeMd = new Set(); // 被 CLAUDE.md 里某一行指到（不含个�
 // 扩展名表里没有的非 Markdown 文件（表不可能列全所有能写注释的格式）只认里面指得到文档的路径，算作已登记；
 // 指不到的不报失效、也不查写法：这类文件里的路径可能只是数据
 const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
-const isPointerSource = (f) => MD_SOURCES.has(f) || !/\.(md|mdx|markdown)$/i.test(f);
+const isPointerSource = (f) => MD_SOURCES.has(f) || !MARKDOWN_RE.test(f);
 // 一行是不是独立成行的注释（粗略，按常见注释前缀认）
 const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/;
 // 只读含 `.context/` 的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
@@ -509,6 +497,63 @@ function filesMentioningContext() {
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
+const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
+const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_ITEM_RE, '').replace(/^\[[ xX]\]\s+/, '');
+// 下面几个判断都是机械的：只看路径前面（或折行时的上一行）有没有话，不判断那句话是文档标题还是重点。
+// 「[重试策略](路径)」「- 重试策略」这种只有标题的登记行认不出来，要 organize-context 读内容看：
+// 标题和短结论靠字面分不开（"会话管理"和"网关会封 IP"），猜错了会让人去改一行本来正确的登记行
+const CONSTRAINT_RE = /必须|务必|不能|不可|不要|不许|不得|禁止|只能|最多|最少|至多|至少|上限|下限|超过|\b(?:must|never|always|at most|at least|do not|don't|cannot|can't)\b/i;
+const NUMBER_RE = /(?<![A-Za-z\d/_-])\d/; // "5 次""上限 3"；v2、OAuth2、HTTP/2 这类名字里的不算
+// 引出登记行的话（"api 相关的项目文档，改动前按需读："）：提到文档、本身不带结论（约束词、数字）。
+// 按"提到文档"来认，不按"以冒号结尾"来认："网关连续失败会封 IP，细节："这种结论也以冒号结尾
+const DOC_WORD_RE = /文档|资料|参考|详见|背景|\b(?:docs?|documents?|documentation|references?|see also|background)\b/i;
+// "以下 2 份文档""3 docs" 数的是文档本身，不是结论里的数字
+const DOC_COUNT_RE = /\d+\s*(?:份|篇)|\d+\s*(?:个|条|项)(?=[^，。；：,;:]{0,6}(?:文档|资料|参考))|\b\d+\s+(?:docs?|documents?|references?)\b/gi;
+const introducesDocs = (t) => DOC_WORD_RE.test(t) && !CONSTRAINT_RE.test(t) && !NUMBER_RE.test(t.replace(DOC_COUNT_RE, ''));
+// 标题、表格行、HTML 注释，以及以冒号或"按需读"结尾的引言：不是重点，也不是折行登记行的上半句
+function isLead(line) {
+  const t = line.trim();
+  return /^(?:[#|]|<!--)/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
+}
+// 顶格写、只是提到文档的话（"api 相关的项目文档。改动前先看有没有相关的。"）：没以冒号结尾的引言
+const mentionsDocsOnly = (line) => /^\S/.test(line) && !LIST_ITEM_RE.test(line) && introducesDocs(line.trim());
+// 一段文字去掉标点、符号、emoji 之后剩下的字。什么都不剩，或只剩"见""文档"这类不带信息的引导词，等于没有话
+const wordsOf = (s) => s.replace(/[^\p{L}\p{N}]/gu, '');
+const LEAD_IN_RE = /^(?:详见|参见|参考|见|文档|链接|这里|seealso|see|referto|docs?|link|here)?$/i;
+// 登记行是不是路径打头：路径前面只剩列表符号、引号、表格竖线、箭头这类标记，或者只有"见""文档："这类引导词。
+// 路径前面有别的话（含链接文字、加粗）就不算，那句话是标题还是重点脚本不判断。
+// 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算。
+// 指向另一个文档入口的行也不算：入口是清单，不是文档，没有重点可提
+function pathFirst(line, raw) {
+  if (ENTRY_RE.test(raw)) return false;
+  return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, line.indexOf(raw))))) && resolvePointer(raw) === raw;
+}
+// 折行的登记行，上一行是不是它的上半句（重点，或纯参考的"什么时候读"）：有话，而且不是标题、表格行、引言
+function carriesHead(prev) {
+  return !LEAD_IN_RE.test(wordsOf(stripItemMarks(prev))) && !isLead(prev) && !mentionsDocsOnly(prev);
+}
+// rule 正文里除了指针行、标题和引出登记行的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
+// 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算。
+// 顶格写、只是提到文档的话，后面紧跟着登记行（中间可以隔空行）时是引言，不算；后面是别的话时算正文。
+// 表格只有表头和分隔行不算，不带指针的数据行是正文；分隔线（---）不算。代码块是正文：rule 里的代码示例就是"怎么做"
+const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
+const HR_RE = /^([-*_])(?:\s*\1){2,}$/;
+function hasOwnContent(text) {
+  const fm = parseFrontmatter(text);
+  const lines = fm ? fm.body : text.split(/\r?\n/);
+  let afterPointer = false;
+  return lines.some((l, i) => {
+    const t = l.trim();
+    if (!t || HR_RE.test(t)) { afterPointer = false; return false; }
+    if (pointersIn(l).length) { afterPointer = true; return false; }
+    afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
+    if (afterPointer) return false;
+    if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
+    if (!mentionsDocsOnly(l)) return carriesHead(l);
+    const next = lines.slice(i + 1).find((x) => x.trim());
+    return !(next && pointersIn(next).length);
+  });
+}
 for (const f of filesMentioningContext()) {
   const isMd = MD_SOURCES.has(f);
   const text = isMd ? read(f) : readRaw(f);
@@ -525,21 +570,27 @@ for (const f of filesMentioningContext()) {
   // 指得到文档的照样算已登记，指不到的不报失效、也不查写法
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
-  const TRAILING_COMMENT_RE = /(?:^|\s)(?:\/\/|\/\*|#|--|<!--)/; // 行尾注释：指针前面有注释符
+  // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
+  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text)));
   prose.forEach(([line, i], k) => {
     const found = pointersIn(line);
     if (!found.length) return;
-    const strict = known && (isMd || cm[i] || TRAILING_COMMENT_RE.test(line.slice(0, line.indexOf(found[0]))));
+    const strict = known && (isMd || inComment(line, i, cm, found[0]));
     // 只删指针路径本身：中文正文和路径之间往往没有空格，按"删到下一个空白为止"会把后面的触发条件一起删掉
     let own = line;
     for (const raw of found) own = own.split(raw).join('');
     // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
-    const separate = isMd ? /^\s*(?:[-*+]|\d+[.)])\s/.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
-    const near = separate || pointersIn(prev).length ? own : `${prev}\n${own}`;
+    const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
+    const folded = !separate && !pointersIn(prev).length; // 这一行接着上一行写
+    const near = folded ? `${prev}\n${own}` : own;
+    // 折行的登记行，重点在上一行时，路径打头不算没写重点
+    const headAbove = folded && carriesHead(prev);
     if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
+    } else if (bareLines && !headAbove && pathFirst(line, found[0])) {
+      add('info', 'pointer-style', f, '登记行以路径开头，路径前面没有重点：只有路径和什么时候读的行进了 context 等于什么都没给，Claude 要读完整份文档才拿得到重点。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」），已经写在路径后面的挪到前面；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
     }
     for (const raw of found) {
       const p = resolvePointer(raw);

@@ -49,14 +49,15 @@ const MAX_RETRY = 3;
 - `record-context`：要记一条项目知识时，决定它写到哪里，按模板写入，并登记进对应入口。
 - 根 CLAUDE.md 的「更多上下文」索引里有一行常驻的写入约定，让 Claude 默认不把背景写成长注释或只记在自动记忆里。
 - comment hook（PostToolUse）：Claude 写入 4 行以上的独立注释块时，提醒它注释只留一句重点，扩展内容进 `.context/`、原处留指针。只提醒、不阻断，JSDoc、license、行尾注释不算。设环境变量 `CONTEXT_KEEPER_COMMENT_HOOK=0` 可关闭。
+- doc hook（PostToolUse）：Claude 改了 `.context/` 里的文档之后，列出指到这份文档的行（领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码注释里的指针，代码块里的示例、源码字符串里的路径不算），提醒它：文档里的结论变了，这些行里的重点在同一次改动里跟着改。只提醒、不阻断；同一会话里同一份文档的清单只给一次，之后再改它、清单没变时只提醒一行，压缩上下文后重新给；没有任何一处指到的文档不提醒，不是 git 仓库的项目也不提醒。设环境变量 `CONTEXT_KEEPER_DOC_HOOK=0` 可关闭。
 
 **读取端**
 
 - 代码注释：读到那段代码时就在眼前，扩展内容的指针也在这里。
 - rule：碰到匹配的文件时自动加载。
 - pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段，开头的 `<?php`、`'use client'`、`<script>` 标签跳过）；同一会话每处指针只拦一次（和拦下它的那次编辑在同一条消息里的后几个 Edit 继续拦，免得漏过去），文档读过（Read 成功，或 Bash 里用 cat / head / tail 这类命令读过；读失败、`git add` 这类只是提到路径的不算）之后指向它的指针都不再拦，主会话压缩上下文后拦过、读过都重新算；主会话和每个子代理各算各的。行注释、块注释（含 JSX 的 `{/* */}`）和 Python docstring 里的指针都认。拦截消息里带文档的绝对路径，会话开在子目录里也不会拼错。不是 git 仓库的项目，拿启动会话的目录当项目根。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
-- 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是领域里多处都该知道、又不属于某一处的长文档清单。
-- 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
+- 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是领域里多处都该知道、又不属于某一处的长文档，每份一行「重点 + 什么时候读 + 路径」：重点随 rule 进 context，细节按需读。
+- 文档入口 `.context/README.md`：挂不到代码上的文档，同样每份一行「重点 + 什么时候读 + 路径」，根 CLAUDE.md 里常驻一行：
 
   ```markdown
   - 做新需求、评估方案前，先看 `.context/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
@@ -71,7 +72,7 @@ const MAX_RETRY = 3;
   node <插件目录>/scripts/check.mjs [路径] [--comments]
   ```
 
-  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、没写"什么时候读"的指针、`@` import、`.claude/rules/`、`.claude/skills/`、`.context/` 有没有被 `.gitignore` 忽略、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码里的注释，其他 Markdown、代码块里的示例路径和源码字符串里的路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
+  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、没写"什么时候读"的指针、没有重点的登记行、`@` import、`.claude/rules/`、`.claude/skills/`、`.context/` 有没有被 `.gitignore` 忽略、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码里的注释，其他 Markdown、代码块里的示例路径和源码字符串里的路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
 
 ## 改造前后
 
@@ -138,5 +139,14 @@ const MAX_RETRY = 3;
 - 检查脚本：只匹配一个生成物或 lockfile 的 rule 不再报单文件 rule（`generated/` 目录、`.generated.` / `.pb.` 这类文件名、`pnpm-lock.yaml`，或文件头几行写着 generated / do not edit）；`record-context` 写明这类 rule 保留
 
 0.6.0：`organize-context` 始终在 plan mode 里运行。不在 plan mode 时先调用 EnterPlanMode 进入，计划用 ExitPlanMode 提交；进不去（工具不可用或用户拒绝）就停下来让用户切到 plan mode 后重跑，不再把计划写进回复里等同意。
+
+0.7.0：领域索引 rule 和 `.context/README.md` 的登记行必须带重点。
+
+- 原来的登记行是「路径 + 什么时候读」，入口进了 context，Claude 什么都没得到，要读完整份文档才拿得到重点，重点和细节还是一起加载。现在和普通指针一样写成「重点 + 什么时候读 + 路径」：文档里不知道就会做错的结论（坑、约束、已知限制）写在这一行，文档里没有这类结论的（纯参考）才省掉
+- 一份文档的重点一句话写不完的：领域索引里的不进索引，单独写成一条 rule（这几条结论加指针）；`.context/README.md` 里的挂不到代码上，登记行写评估需求时最容易做错的那一条，括号里点出文档里还有哪几条结论
+- 登记行里只写结论，会变的当前值（已用多少、当前体积）留在文档里。文档里的结论变了，登记行的重点在同一次改动里改掉。新增 doc hook：Claude 改了文档之后，列出指到它的行提醒同步重点；人手改的文档、提醒了没改的，`organize-context` 体检时会逐行对着文档看
+- 检查脚本新增提示：文档入口、领域索引 rule 里以路径开头的登记行（路径前面只有"见""文档："这类引导词的和表格里的也算；折行、上一行有话的不算；路径前面有别的话的不算，含链接文字和加粗，那句话是标题还是重点脚本不判断），以及正文只有这种行的 rule
+
+升级后跑一次 `organize-context`，它会列出要补重点的登记行，批准后执行。脚本只认得出以路径开头的行，别的写法（比如路径前面只有文档标题的 `[重试策略](路径)`）由 `organize-context` 读内容判断。
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。

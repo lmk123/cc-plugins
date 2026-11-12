@@ -10,12 +10,10 @@
 // 只管非 Markdown 文件里的指针（Markdown 里的路径多半是示例）；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { commentLines, pointersIn, resolvePointer } from './lib/pointers.mjs';
-
-if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
+import { MARKDOWN_RE, commentLines, findRoot, pointersIn, resolvePointer } from './lib/pointers.mjs';
+import { stateFile as stateFileFor } from './lib/state.mjs';
 
 let input;
 try {
@@ -24,38 +22,32 @@ try {
   process.exit(0);
 }
 
-const safe = (s) => String(s).replace(/[^\w-]/g, '_').slice(0, 120);
-const sid = safe(input.session_id || input.transcript_path || 'unknown');
 // 子代理里 session_id、transcript_path 都是主会话的，靠 agent_id 区分：状态各记各的
 const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null;
-const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}${agentId ? `.${safe(agentId)}` : ''}.json`);
+const stateFile = stateFileFor(input);
 
-// 压缩之后，拦截消息和读过的文档都不在 context 里了：清掉状态，下次改到时重新拦
+// 压缩之后，拦截消息和读过的文档都不在 context 里了：清掉状态，下次改到时重新拦。
+// doc-hook 提醒过的清单也不在了，它的状态一起清（SessionStart 只挂了这一个脚本）；关掉 pointer-guard 时照样清
 if (input.hook_event_name === 'SessionStart') {
-  if (input.source === 'compact') try { fs.rmSync(stateFile, { force: true }); } catch {}
+  if (input.source === 'compact') {
+    for (const f of [stateFile, stateFileFor(input, 'doc')]) try { fs.rmSync(f, { force: true }); } catch {}
+  }
   process.exit(0);
 }
+
+if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
 
 const tool = input.tool_name;
 const ti = input.tool_input || {};
 if (!['Edit', 'MultiEdit', 'Write'].includes(tool) || !ti.file_path) process.exit(0);
 const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
 // 不按扩展名表筛：表里没有的格式（.proto、.graphql……）照样能写注释指针。没有指针的文件下面自然放行
-if (/\.(md|mdx|markdown)$/i.test(file)) process.exit(0);
+if (MARKDOWN_RE.test(file)) process.exit(0);
 
-// 项目根取离文件最近的 .git（worktree 里是 .git 文件）。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里
-// 也是拿运行目录当根），文件不在它下面就不管：指针是项目根起的路径，没有根就解析不了
-let root = null;
-for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
-  if (fs.existsSync(path.join(dir, '.git'))) { root = dir; break; }
-  if (path.dirname(dir) === dir) break;
-}
-if (!root) {
-  const base = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-  const inside = base ? path.relative(path.resolve(base), file) : '..';
-  if (inside.startsWith('..') || path.isAbsolute(inside)) process.exit(0);
-  root = path.resolve(base);
-}
+// 项目根取离文件最近的 .git。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里也是拿运行目录当根），
+// 文件不在它下面就不管
+const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
+if (!root) process.exit(0);
 if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');
@@ -343,7 +335,7 @@ const msg = [
   // 指针写的是仓库根起的路径，会话可能开在子目录里：给出绝对路径，免得按当前目录拼错
   `文档的绝对路径：${[...new Set(todo.map((x) => path.join(root, x.doc)))].slice(0, 20).join('、')}`,
   '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
-  '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新。',
+  '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新；领域索引 rule、文档入口里登记这份文档的行，重点跟着不成立的也一并改。',
 ].join('\n');
 
 process.stdout.write(JSON.stringify({

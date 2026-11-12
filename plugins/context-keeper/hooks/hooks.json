@@ -1,5 +1,5 @@
 {
-  "description": "写入长注释块时提醒只留一句重点、扩展内容进 .context/（CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）；改到带 .context/ 指针的代码而本会话没读过那份文档时拦一次，压缩上下文后重新算（CONTEXT_KEEPER_POINTER_HOOK=0 关闭）",
+  "description": "写入长注释块时提醒只留一句重点、扩展内容进 .context/（CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）；改到带 .context/ 指针的代码而本会话没读过那份文档时拦一次，压缩上下文后重新算（CONTEXT_KEEPER_POINTER_HOOK=0 关闭）；改了 .context/ 里的文档后列出指到它的行，提醒同步这些行里的重点（CONTEXT_KEEPER_DOC_HOOK=0 关闭）",
   "hooks": {
     "PreToolUse": [
       {
@@ -32,6 +32,11 @@
           {
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 && node \"${CLAUDE_PLUGIN_ROOT}/scripts/comment-hook.mjs\" || true",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 && { i=$(cat); case \"$i\" in *.context*) printf '%s' \"$i\" | node \"${CLAUDE_PLUGIN_ROOT}/scripts/doc-hook.mjs\";; esac; } || true",
             "timeout": 10
           }
         ]
