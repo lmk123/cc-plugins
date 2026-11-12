@@ -2,10 +2,11 @@
 // PreToolUse hook：要改的代码附近有指向 .context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
 // 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每处指针只拦一次，文档读过之后不再拦。
 // 主会话和每个子代理各算各的：子代理的 context 是独立的，主会话读过、被拦过都不代表它知道。
+// 主会话压缩上下文之后（SessionStart，source 为 compact）清掉主会话的状态：拦过、读过都重新算。
 // 设环境变量 CONTEXT_KEEPER_POINTER_HOOK=0 可关闭。
 //
-// "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）和紧贴在它们上方的注释；
-// 文件头注释（后面是空行或 import 的那几段，紧贴声明的不算）。
+// "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）、紧贴在它们上方的注释
+// 和紧跟在它们下面的 docstring；文件头注释（后面是空行或 import 的那几段，紧贴声明的不算）。
 // 只管非 Markdown 文件里的指针（Markdown 里的路径多半是示例）；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
@@ -20,6 +21,18 @@ let input;
 try {
   input = JSON.parse(fs.readFileSync(0, 'utf8'));
 } catch {
+  process.exit(0);
+}
+
+const safe = (s) => String(s).replace(/[^\w-]/g, '_').slice(0, 120);
+const sid = safe(input.session_id || input.transcript_path || 'unknown');
+// 子代理里 session_id、transcript_path 都是主会话的，靠 agent_id 区分：状态各记各的
+const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null;
+const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}${agentId ? `.${safe(agentId)}` : ''}.json`);
+
+// 压缩之后，拦截消息和读过的文档都不在 context 里了：清掉状态，下次改到时重新拦
+if (input.hook_event_name === 'SessionStart') {
+  if (input.source === 'compact') try { fs.rmSync(stateFile, { force: true }); } catch {}
   process.exit(0);
 }
 
@@ -75,8 +88,39 @@ if (!ranges.length) process.exit(0);
 
 // ---------- 附近的行 ----------
 
-const COMMENT_RE = /^(\/\/|\/\*|\*|#|--|<!--|;|%|'''|""")/;
-const isComment = (k) => COMMENT_RE.test(lines[k].trimStart());
+// 哪些行是注释。行注释和 `*` 开头的块注释续行按前缀认，JSX 的 `{/* … */}` 也认；
+// `/* … */`、`<!-- … -->` 和行首的三引号 docstring 跨行时，中间没有前缀的行也算（CSS 只有这种块注释）。
+// 没闭合的块不算，免得把后面整份文件当成注释；赋值给变量的三引号字符串不是注释，但要整段跳过，
+// 否则收尾的那一行三引号会被当成新的开头
+const COMMENT_RE = /^(\/\/|\/\*|\*|#|--|<!--|;|%|\{\s*\/\*)/;
+const BLOCK_OPEN_RE = /^(?:\{\s*)?(\/\*|<!--)/;
+const CLOSE = { '/*': '*/', '<!--': '-->', '"""': '"""', "'''": "'''" };
+const comment = new Array(lines.length).fill(false);
+const docstring = new Array(lines.length).fill(false);
+for (let k = 0; k < lines.length; k++) {
+  const t = lines[k].trim();
+  if (COMMENT_RE.test(t)) comment[k] = true;
+  let open = null;
+  let at = 0;
+  let doc = false;
+  const m = t.match(BLOCK_OPEN_RE);
+  if (m) {
+    open = m[1];
+    at = m[0].length;
+  } else if (!comment[k]) {
+    const q = t.search(/"""|'''/);
+    if (q === -1) continue;
+    open = t.slice(q, q + 3);
+    at = q + 3;
+    doc = /^[rRuUbBfF]{0,2}$/.test(t.slice(0, q));
+  } else continue;
+  let end = t.indexOf(CLOSE[open], at) !== -1 ? k : -1;
+  for (let j = k + 1; end === -1 && j < lines.length; j++) if (lines[j].includes(CLOSE[open])) end = j;
+  if (end === -1) continue;
+  if (m || doc) for (let j = k; j <= end; j++) { comment[j] = true; docstring[j] = doc; }
+  k = end;
+}
+const isComment = (k) => comment[k];
 const blank = (k) => !lines[k].trim();
 const indent = (k) => lines[k].match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
 
@@ -88,8 +132,13 @@ const leading = (k) => {
     else if (!/^\s*@/.test(lines[j])) break;
   }
 };
+// 紧跟在第 k 行下面的 docstring：Python 把函数、类的说明写在声明下面
+const trailingDoc = (k) => {
+  for (let j = k + 1; j < lines.length && docstring[j]; j++) near.add(j);
+};
 for (const [s, e] of ranges) {
   for (let k = s; k <= e && k < lines.length; k++) near.add(k);
+  trailingDoc(Math.min(e, lines.length - 1));
   let k = s;
   while (k < lines.length && blank(k)) k++;
   if (k >= lines.length) continue;
@@ -99,6 +148,7 @@ for (const [s, e] of ranges) {
   for (let j = k - 1; j >= 0 && cur > 0; j--) {
     if (blank(j) || isComment(j) || indent(j) >= cur) continue;
     cur = indent(j);
+    trailingDoc(j);
     while (/^[)\]}>]/.test(lines[j].trimStart()) && j > 0) {
       let p = j - 1;
       while (p > 0 && (blank(p) || indent(p) > cur)) p--;
@@ -142,11 +192,6 @@ if (!hits.length) process.exit(0);
 // 先查拦过没有，再去读转录：拦过的指针不用为它把整份转录读一遍。
 // 按指针那一行的文本记，不按行号：文件上方增删行之后还认得出是同一处
 const rel = path.relative(root, file).split(path.sep).join('/');
-const safe = (s) => String(s).replace(/[^\w-]/g, '_').slice(0, 120);
-const sid = safe(input.session_id || input.transcript_path || 'unknown');
-// 子代理里 session_id、transcript_path 都是主会话的，靠 agent_id 区分：状态各记各的
-const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null;
-const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}${agentId ? `.${safe(agentId)}` : ''}.json`);
 // { 指针的 key: 拦下它的时间戳 }。0.5.1 及以前存的是 key 数组，时间按 0 算
 let warned = {};
 try {
@@ -165,11 +210,22 @@ if (!todo.length) process.exit(0);
 
 // ---------- 本会话读过哪些 ----------
 
-// 读过：Read / Edit / Write 过这个文件，或 Bash 命令里出现过它的 `.context/…` 部分（cd 进子目录后 cat 时没有仓库根起的前缀）。
+// 读过：Read / Edit / Write 过这个文件，或 Bash 里用 cat / head / tail 这类命令读过它（按 `.context/…` 部分认：
+// cd 进子目录后 cat 时没有仓库根起的前缀），并且那次调用没报错——路径拼错、读失败的不算。
+// `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
 const tailOf = (p) => p.slice(p.lastIndexOf('.context/'));
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
+const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result
+const READ_CMDS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'nl']);
+const bashReads = (cmd, tail) => cmd.split(/&&|\|\||[;|\n]/).some((seg) => {
+  if (!seg.includes(tail)) return false;
+  const words = seg.trim().split(/\s+/);
+  while (words.length && /^\w+=/.test(words[0])) words.shift(); // FOO=bar cat …
+  const name = path.basename(words[0] || '');
+  return READ_CMDS.has(name) || (name === 'sed' && words.includes('-n'));
+});
 // 子代理的转录在 <主转录去掉 .jsonl>/subagents/ 下（可能再隔一层子目录），文件名 agent-<agent_id>.jsonl。
 // 找不到就当没读过：最多多拦一次
 function agentTranscript(main, id) {
@@ -192,19 +248,26 @@ try {
   const tails = [...unread].map(tailOf);
   for (const l of transcript.split('\n')) {
     if (l.includes('"compact_boundary"')) {
-      try { if (JSON.parse(l).subtype === 'compact_boundary') seen.clear(); } catch {}
+      try { if (JSON.parse(l).subtype === 'compact_boundary') { seen.clear(); pending.clear(); } } catch {}
       continue;
     }
-    if (!tails.some((t) => l.includes(t))) continue;
+    const isResult = pending.size > 0 && l.includes('"tool_result"');
+    if (!isResult && !tails.some((t) => l.includes(t))) continue;
     let o;
     try { o = JSON.parse(l); } catch { continue; }
-    const content = o.type === 'assistant' && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+    const content = o.message && Array.isArray(o.message.content) ? o.message.content : [];
     for (const c of content) {
-      if (c.type !== 'tool_use' || !c.input) continue;
+      if (o.type === 'user' && c.type === 'tool_result' && pending.has(c.tool_use_id)) {
+        if (!c.is_error) seen.add(pending.get(c.tool_use_id));
+        pending.delete(c.tool_use_id);
+        continue;
+      }
+      if (o.type !== 'assistant' || c.type !== 'tool_use' || !c.input || !c.id) continue;
       for (const p of unread) {
         const fp = typeof c.input.file_path === 'string' ? c.input.file_path.split(path.sep).join('/') : '';
-        if (fp && (fp === p || fp.endsWith(`/${p}`))) seen.add(p);
-        else if (c.name === 'Bash' && typeof c.input.command === 'string' && c.input.command.includes(tailOf(p))) seen.add(p);
+        if (fp ? fp === p || fp.endsWith(`/${p}`) : c.name === 'Bash' && typeof c.input.command === 'string' && bashReads(c.input.command, tailOf(p))) {
+          pending.set(c.id, p);
+        }
       }
     }
   }
@@ -246,6 +309,8 @@ const shown = spans.slice(0, 20).map(([a, b]) => {
 const msg = [
   `[context-keeper] 这次要改的代码附近有指向项目文档的指针，${agentId ? '这个子代理' : '本会话'}还没读过：`,
   ...shown,
+  // 指针写的是仓库根起的路径，会话可能开在子目录里：给出绝对路径，免得按当前目录拼错
+  `文档的绝对路径：${[...new Set(todo.map((x) => path.join(root, x.doc)))].slice(0, 20).join('、')}`,
   '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
   '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新。',
 ].join('\n');

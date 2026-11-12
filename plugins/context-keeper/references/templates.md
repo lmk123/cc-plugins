@@ -19,7 +19,14 @@
 只和一个文件（或其中一段代码）有关的，写在相关代码上方，1–3 行。两三行能说完的直接写，不拆文档。`apps/web/src/api/client.ts`：
 
 ```ts
-// 必须在 setupInterceptors() 之后调用：拦截器里会补上鉴权头，顺序反了首个请求 401
+// 拦截器的注册顺序不能换：鉴权头要在签名之前补上，否则签名对不上，请求全部 401
+export function setupInterceptors() {
+```
+
+约束调用方的（改这个文件的人不用知道、调用它的人要知道）不写成普通注释，写进 API 文档注释：
+
+```ts
+/** 必须在 setupInterceptors() 之后调用：拦截器里会补上鉴权头，顺序反了首个请求 401 */
 export function createClient() {
 ```
 
