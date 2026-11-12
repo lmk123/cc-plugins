@@ -76,6 +76,16 @@ export function commentHook(t, { file, tool = 'Write', response }) {
   return out ? out.additionalContext : null;
 }
 
+// 模拟 Write / Edit 改了文档之后触发 doc-hook。返回提醒文字，没提醒时返回 null
+export function docHook(t, { file, tool = 'Edit', env }) {
+  const out = run('doc-hook.mjs', {
+    cwd: t.repo,
+    tool_name: tool,
+    tool_input: { file_path: path.join(t.repo, file) },
+  }, { tmp: t.tmp, env });
+  return out ? out.additionalContext : null;
+}
+
 export function check(t, args = []) {
   const r = spawnSync('node', [path.join(SCRIPTS, 'check.mjs'), ...args, '--json'], { cwd: t.repo, encoding: 'utf8' });
   return { status: r.status, ...JSON.parse(r.stdout) };

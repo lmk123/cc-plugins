@@ -166,6 +166,71 @@ test('正文只有指针的 rule：引出列表的话、折到下一行的后半
   assert.ok(!hit('own.md'));
 });
 
+test('正文只有指针的 rule：以冒号、"按需读"结尾的结论和表格里的数据行算正文，只有表头的表格不算', () => {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const bare = '- `.context/api/retry-policy.md`：改重试次数前读\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/on-demand.md': `${fm}重试上限不能超过 3，细节按需读：\n${bare}`,
+    '.claude/rules/api/colon.md': `${fm}网关连续失败会封 IP，细节：\n${bare}`,
+    // 表格一行一个字符串：分隔行和路径写在同一行源码里，对本仓库跑检查脚本时会被当成行尾注释里的失效指针
+    '.claude/rules/api/table.md': fm + [
+      '| 接口 | 每秒上限 |',
+      '| --- | --- |',
+      '| /pay | 50 |',
+      '',
+      '`.context/api/retry-policy.md`：改限流前读',
+    ].join('\n') + '\n',
+    '.claude/rules/api/table-only.md': fm + [
+      '| 文档 | 什么时候读 |',
+      '| --- | --- |',
+      '| `.context/api/retry-policy.md` | 改重试次数前 |',
+    ].join('\n') + '\n',
+  }));
+  const hit = (name) => r.findings.some((f) => f.file.endsWith(name) && /没有重点/.test(f.msg));
+  assert.ok(!hit('on-demand.md'));
+  assert.ok(!hit('colon.md'));
+  assert.ok(!hit('table.md'));
+  assert.ok(hit('table-only.md'));
+});
+
+test('折行的登记行：上一行带"按需读"的重点、纯参考的"什么时候读"算上半句，单独一行的标题和没以冒号结尾的引言不算', () => {
+  assert.deepEqual(bareLinesOf([
+    '- 网关连续 5 次失败封 IP，细节按需读。改重试次数前读',
+    '  `.context/api/retry-policy.md`',
+    '- 新增错误码前读',
+    '  `.context/payment/installments.md`',
+  ]), []);
+  assert.deepEqual(bareLinesOf([
+    '- 重试策略',
+    '  `.context/api/retry-policy.md`：改重试次数前',
+    '',
+    'api 相关的项目文档。改动前先看有没有相关的。',
+    '`.context/payment/installments.md`：新增错误码前',
+  ]), [2, 5]);
+});
+
+test('链接文字、加粗里写的是重点时不报没有重点，是标题（冒号写在加粗里面的也算）时照报', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '- [网关连续 5 次失败封 IP 10 分钟](.context/api/retry-policy.md)：改重试次数前读',
+    '- **网关会封 IP** `.context/api/retry-policy.md`：改重试次数前读',
+    '- **重试策略：** `.context/api/retry-policy.md`，改重试次数前读',
+    '- **会话管理** `.context/payment/installments.md`：新增错误码前',
+  ]), [4, 5]);
+});
+
+test('指向另一个文档入口的登记行不报没有重点', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'CLAUDE.md': '# 项目\n\n## 更多上下文\n- 做新需求、评估方案前，先看 `.context/README.md`、`apps/web/.context/README.md`：评估过但没做的需求\n',
+    '.context/README.md': `${CLEAN['.context/README.md']}- \`apps/web/.context/README.md\`：评估 web 包的需求前读\n`,
+    'apps/web/.context/README.md': '# web 包文档入口\n',
+  }));
+  assert.ok(!r.findings.some((f) => /没有重点/.test(f.msg)));
+});
+
 test('孤儿文档、没被根 CLAUDE.md 指到的入口', () => {
   const r = check(makeRepo({ ...CLEAN, 'CLAUDE.md': '# 项目\n', '.context/api/unused.md': '# 没人指\n' }));
   assert.ok(r.findings.some((f) => f.category === 'orphan' && f.file === '.context/api/unused.md'));

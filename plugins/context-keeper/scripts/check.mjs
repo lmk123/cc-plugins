@@ -510,37 +510,63 @@ function filesMentioningContext() {
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
-// 标题、表格里不带指针的行（表头、分隔行）和引出列表的话（"……："、"……按需读。"）：不是重点，也不是折行登记行的上半句。
-// 以冒号结尾、但带着"必须 / 不能 / 上限"这类词的是约束本身（"重试上限 3，细节："），不算
-const CONSTRAINT_RE = /必须|务必|不能|不可|不要|不许|禁止|只能|上限|下限|\b(?:must|never|always|do not|don't|cannot|can't)\b/i;
+const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_ITEM_RE, '').replace(/^\[[ xX]\]\s+/, '');
+// 下面几个判断都是机械的，靠的是一句话里有没有结论的特征：约束词（"必须 / 不能 / 上限"）和数字
+// （"5 次""上限 3"；v2、OAuth2、HTTP/2 这类名字里的不算）。不带这些特征的短结论认不出来，要 organize-context 读内容看
+const CONSTRAINT_RE = /必须|务必|不能|不可|不要|不许|不得|禁止|只能|最多|最少|至多|至少|上限|下限|超过|\b(?:must|never|always|at most|at least|do not|don't|cannot|can't)\b/i;
+const NUMBER_RE = /(?<![A-Za-z\d/_-])\d/;
+// 引出登记行的话（"api 相关的项目文档，改动前按需读："）：提到文档、以冒号或"按需读"结尾、本身不带结论。
+// 按"提到文档"来认，不按"以冒号结尾"来认："网关连续失败会封 IP，细节："这种结论也以冒号结尾
+const DOC_WORD_RE = /文档|资料|参考|详见|背景|\b(?:docs?|documents?|documentation|references?|see also|background)\b/i;
+const introducesDocs = (t) => DOC_WORD_RE.test(t) && !CONSTRAINT_RE.test(t) && !NUMBER_RE.test(t);
+// 标题、表格行和引出登记行的话：不是重点，也不是折行登记行的上半句
 function isLead(line) {
   const t = line.trim();
-  return /^[#|]/.test(t) || /按需读/.test(t) || (/[：:]$/.test(t) && !CONSTRAINT_RE.test(t));
+  return /^[#|]/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
+}
+// 一段文字只是文档标题（"重试策略"），还是重点（"重试上限 3""网关会封 IP"）：标题不带句内标点、数字、约束词和"会 …"
+// （会话、机会这类词里的不算）
+const WILL_RE = /(?<![机社协学体约聚开])会(?![话员议计])/;
+function isTitle(s) {
+  const t = s.replace(/[`*_]/g, '').trim().replace(/[：:]$/, '');
+  return !/[，。；：,;:!?！？]|\.(?:\s|$)/.test(t) && !NUMBER_RE.test(t) && !CONSTRAINT_RE.test(t) && !WILL_RE.test(t);
 }
 // 登记行的重点有没有写在路径前面（「重点。改 X 前读 路径」）。认得出的是路径打头的行：路径前面只剩列表符号、
-// 引号、表格竖线这类标记，或者只有文档标题（`[标题](路径)` 的链接文字、单独一段不带数字和标点的加粗）。
-// 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算
+// 引号、表格竖线这类标记，或者只有文档标题（`[标题](路径)` 的链接文字、单独一段加粗；写的是重点时不算）。
+// 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算。
+// 指向另一个文档入口的行也不算：入口是清单，不是文档，没有重点可提
 function pathFirst(line, raw) {
-  const head = line.slice(0, line.indexOf(raw))
-    .replace(/\.\/$/, '') // pointersIn 去掉了路径开头的 ./
-    .replace(/^\s*(?:>\s*)+/, '')
-    .replace(LIST_ITEM_RE, '')
-    .replace(/^\[[ xX]\]\s+/, '')
-    .replace(/\[[^\]]*\]\($/, '')
-    .replace(/^(\*\*|__)[^*_\d，。；：,.;:]+\1[\s：:—–-]*(?=`?$)/, '')
+  if (ENTRY_RE.test(raw)) return false;
+  const head = stripItemMarks(line.slice(0, line.indexOf(raw)).replace(/\.\/$/, '')) // pointersIn 去掉了路径开头的 ./
+    .replace(/\[([^\]]*)\]\($/, (m, s) => (isTitle(s) ? '' : m))
+    .replace(/^(\*\*|__)(.+?)\1[\s：:—–-]*(?=`?$)/, (m, q, s) => (isTitle(s) ? '' : m))
     .replace(/[\s`*_"'“”‘’「」《》<(（[|>]/g, '');
   return head === '' && resolvePointer(raw) === raw;
 }
-// rule 正文里除了指针行、标题和引出列表的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
-// 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算
+// 折行的登记行，上一行是不是它的上半句：重点，或纯参考的"什么时候读"。标题、表格行、引出登记行的话不是；
+// 单独一行的文档标题（"- 重试策略"）不是；顶格写、只是提到文档的话（没以冒号结尾的引言）也不是
+function carriesHead(prev) {
+  const t = stripItemMarks(prev).trim();
+  if (!t || isLead(prev)) return false;
+  if (/^\S/.test(prev) && !LIST_ITEM_RE.test(prev) && introducesDocs(t)) return false;
+  return !isTitle(t) || TRIGGER_RE.test(t);
+}
+// rule 正文里除了指针行、标题和引出登记行的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
+// 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算。
+// 表格只有表头和分隔行不算，不带指针的数据行是正文
+const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
 function hasOwnContent(text) {
   const fm = parseFrontmatter(text);
+  const lines = fm ? fm.body : text.split(/\r?\n/);
   let afterPointer = false;
-  return (fm ? fm.body : text.split(/\r?\n/)).some((l) => {
-    if (!l.trim()) { afterPointer = false; return false; }
+  return lines.some((l, i) => {
+    const t = l.trim();
+    if (!t) { afterPointer = false; return false; }
     if (pointersIn(l).length) { afterPointer = true; return false; }
     afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
-    return !afterPointer && !isLead(l);
+    if (afterPointer) return false;
+    if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
+    return !isLead(l);
   });
 }
 for (const f of filesMentioningContext()) {
@@ -575,8 +601,8 @@ for (const f of filesMentioningContext()) {
     const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
     const folded = !separate && !pointersIn(prev).length; // 这一行接着上一行写
     const near = folded ? `${prev}\n${own}` : own;
-    // 折行的登记行，重点在上一行：上一行有话、又不是标题或引出列表的话时，路径打头不算没写重点
-    const headAbove = folded && prev.trim() !== '' && !isLead(prev);
+    // 折行的登记行，重点在上一行时，路径打头不算没写重点
+    const headAbove = folded && carriesHead(prev);
     if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
     } else if (bareLines && !headAbove && pathFirst(line, found[0])) {
