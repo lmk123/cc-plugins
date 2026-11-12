@@ -28,19 +28,21 @@ function run(script, input, { tmp, env = {} }) {
   return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : null;
 }
 
-// 转录里的几种行
-export const use = (id, name, input) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
+// 转录里的几种行。msg 是这次工具调用所在的 assistant 消息 id：同一条消息的几个工具调用各占一行，id 相同
+export const use = (id, name, input, msg) => JSON.stringify({ type: 'assistant', message: { ...(msg ? { id: msg } : {}), content: [{ type: 'tool_use', id, name, input }] } });
 export const result = (id, isError = false) => JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'x', ...(isError ? { is_error: true } : {}) }] } });
 export const compact = () => JSON.stringify({ type: 'system', subtype: 'compact_boundary' });
 
-// 模拟一次 Edit 触发 pointer-guard。返回拦截消息，放行时返回 null
-export function guard(t, { file, old, session = 's1', agent, transcript = [], cwd, env }) {
+// 模拟一次 Edit 触发 pointer-guard。返回拦截消息，放行时返回 null。
+// toolUseId 是这次 Edit 自己的 tool_use id：要让 hook 查得到它在哪条消息里，transcript 里得有对应的 use() 行
+export function guard(t, { file, old, session = 's1', agent, transcript = [], cwd, env, toolUseId }) {
   const transcriptPath = path.join(t.tmp, `${session}.jsonl`);
   fs.writeFileSync(transcriptPath, transcript.join('\n') + '\n');
   const out = run('pointer-guard.mjs', {
     hook_event_name: 'PreToolUse',
     session_id: session,
     ...(agent ? { agent_id: agent } : {}),
+    ...(toolUseId ? { tool_use_id: toolUseId } : {}),
     transcript_path: transcriptPath,
     cwd: cwd || t.repo,
     tool_name: 'Edit',
@@ -58,7 +60,7 @@ export function age(t, ms = 5000) {
   const dir = path.join(t.tmp, 'context-keeper');
   for (const f of fs.readdirSync(dir)) {
     const state = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-    for (const k of Object.keys(state)) state[k] -= ms;
+    for (const k of Object.keys(state)) state[k].t -= ms;
     fs.writeFileSync(path.join(dir, f), JSON.stringify(state));
   }
 }

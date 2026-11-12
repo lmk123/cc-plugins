@@ -24,6 +24,43 @@ export function resolvePointer(raw, exists) {
   }
 }
 
+// 哪些行是注释，不分语言，pointer-guard 和 check.mjs 用同一套口径认"注释里的指针"。lines 是按 \n 切开的行。
+// 行注释和 `*` 开头的块注释续行按前缀认，JSX 的 `{/* … */}` 也认；
+// `/* … */`、`<!-- … -->` 和行首的三引号 docstring 跨行时，中间没有前缀的行也算（CSS 只有这种块注释）。
+// 没闭合的块不算，免得把后面整份文件当成注释；赋值给变量的三引号字符串不是注释，但要整段跳过，
+// 否则收尾的那一行三引号会被当成新的开头。返回 { comment, docstring }，都是和 lines 等长的布尔数组
+const COMMENT_RE = /^(\/\/|\/\*|\*|#|--|<!--|;|%|\{\s*\/\*)/;
+const BLOCK_OPEN_RE = /^(?:\{\s*)?(\/\*|<!--)/;
+const CLOSE = { '/*': '*/', '<!--': '-->', '"""': '"""', "'''": "'''" };
+export function commentLines(lines) {
+  const comment = new Array(lines.length).fill(false);
+  const docstring = new Array(lines.length).fill(false);
+  for (let k = 0; k < lines.length; k++) {
+    const t = lines[k].trim();
+    if (COMMENT_RE.test(t)) comment[k] = true;
+    let open = null;
+    let at = 0;
+    let doc = false;
+    const m = t.match(BLOCK_OPEN_RE);
+    if (m) {
+      open = m[1];
+      at = m[0].length;
+    } else if (!comment[k]) {
+      const q = t.search(/"""|'''/);
+      if (q === -1) continue;
+      open = t.slice(q, q + 3);
+      at = q + 3;
+      doc = /^[rRuUbBfF]{0,2}$/.test(t.slice(0, q));
+    } else continue;
+    let end = t.indexOf(CLOSE[open], at) !== -1 ? k : -1;
+    for (let j = k + 1; end === -1 && j < lines.length; j++) if (lines[j].includes(CLOSE[open])) end = j;
+    if (end === -1) continue;
+    if (m || doc) for (let j = k; j <= end; j++) { comment[j] = true; docstring[j] = doc; }
+    k = end;
+  }
+  return { comment, docstring };
+}
+
 // 指针有没有写"什么时候读"。没写的（"原因见 X""详见 X"）只能靠 Claude 猜要不要读。
 // 认的是"…前 / …时 / …之后"。按排除来认：前、时后面跟什么动词都行（"前阅读""时对照""前确认"），
 // 只排除它们属于别的词的情况——"以前""目前""超时""同时"（前面的字），"前端""前缀""时间""时序"（后面的字），"前 3 次"。

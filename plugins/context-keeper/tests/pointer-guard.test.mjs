@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { makeRepo, guard, sessionStart, age, use, result, compact } from './helpers.mjs';
 
@@ -45,6 +46,43 @@ test('拦下后 3 秒内对同一处继续拦，过后放行', () => {
   assert.ok(guard(t, edit));
   age(t);
   assert.equal(guard(t, edit), null);
+});
+
+test('查得到消息 id 时按消息算：同一条消息里隔多久都继续拦，换了一条消息 3 秒内也放行', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const call = (id, msg) => use(id, 'Edit', { file_path: path.join(t.repo, 'src/retry.ts') }, msg);
+  // 一条消息里两个 Edit，中间夹了一个跑了 5 秒的命令
+  const same = [call('e1', 'm1'), call('e2', 'm1')];
+  assert.ok(guard(t, { ...edit, session: 'slow', transcript: same, toolUseId: 'e1' }));
+  age(t);
+  assert.ok(guard(t, { ...edit, session: 'slow', transcript: same, toolUseId: 'e2' }));
+  // Claude 看到拦截消息后马上重试：新的一条消息，不用等 3 秒
+  assert.ok(guard(t, { ...edit, session: 'fast', transcript: [call('e1', 'm1')], toolUseId: 'e1' }));
+  const retry = [call('e1', 'm1'), result('e1', true), call('e3', 'm2')];
+  assert.equal(guard(t, { ...edit, session: 'fast', transcript: retry, toolUseId: 'e3' }), null);
+});
+
+test('文件头前面的 <?php、use client 指令、<script> 标签不算代码', () => {
+  const t = repoWith({
+    'src/a.php': `<?php\ndeclare(strict_types=1);\n// ${POINTER}\n\nnamespace App;\n\nfunction f() {\n  return 1;\n}\n`,
+    'src/a.tsx': `'use client';\n// ${POINTER}\n\nimport x from 'x';\n\nexport function C() {\n  return 1;\n}\n`,
+    'src/a.vue': `<script setup lang="ts">\n// ${POINTER}\n\nimport x from 'x';\nconst a = 1;\n</script>\n`,
+    // 指令下面紧贴着声明的注释是那个声明的，不算文件头
+    'src/b.tsx': `'use client';\n// ${POINTER}\nconst A = 1;\n\nexport function C() {\n  return 1;\n}\n`,
+  });
+  assert.ok(guard(t, { file: 'src/a.php', old: '  return 1;', session: 'php' }));
+  assert.ok(guard(t, { file: 'src/a.tsx', old: '  return 1;', session: 'tsx' }));
+  assert.ok(guard(t, { file: 'src/a.vue', old: 'const a = 1;', session: 'vue' }));
+  assert.equal(guard(t, { file: 'src/b.tsx', old: '  return 1;', session: 'decl' }), null);
+});
+
+test('不是 git 仓库时拿启动会话的目录当项目根，文件不在它下面就不管', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  fs.rmSync(path.join(t.repo, '.git'), { recursive: true });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  assert.ok(guard(t, { ...edit, session: 'in', env: { CLAUDE_PROJECT_DIR: t.repo } }));
+  assert.equal(guard(t, { ...edit, session: 'out', env: { CLAUDE_PROJECT_DIR: path.join(t.repo, 'other') } }), null);
 });
 
 test('JSX 注释、不带 * 的块注释、Python docstring 里的指针都认', () => {

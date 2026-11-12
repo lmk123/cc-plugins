@@ -6,14 +6,14 @@
 // 设环境变量 CONTEXT_KEEPER_POINTER_HOOK=0 可关闭。
 //
 // "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）、紧贴在它们上方的注释
-// 和紧跟在它们下面的 docstring；文件头注释（后面是空行或 import 的那几段，紧贴声明的不算）。
+// 和紧跟在它们下面的 docstring；文件头注释（后面是空行或 import 的那几段，紧贴声明的不算；开头的 <?php、指令、<script> 跳过）。
 // 只管非 Markdown 文件里的指针（Markdown 里的路径多半是示例）；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { pointersIn, resolvePointer } from './lib/pointers.mjs';
+import { commentLines, pointersIn, resolvePointer } from './lib/pointers.mjs';
 
 if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
 
@@ -43,13 +43,19 @@ const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
 // 不按扩展名表筛：表里没有的格式（.proto、.graphql……）照样能写注释指针。没有指针的文件下面自然放行
 if (/\.(md|mdx|markdown)$/i.test(file)) process.exit(0);
 
-// 项目根取离文件最近的 .git（worktree 里是 .git 文件）。找不到就不管：指针是仓库根起的路径，没有根就解析不了
+// 项目根取离文件最近的 .git（worktree 里是 .git 文件）。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里
+// 也是拿运行目录当根），文件不在它下面就不管：指针是项目根起的路径，没有根就解析不了
 let root = null;
 for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
   if (fs.existsSync(path.join(dir, '.git'))) { root = dir; break; }
   if (path.dirname(dir) === dir) break;
 }
-if (!root) process.exit(0);
+if (!root) {
+  const base = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+  const inside = base ? path.relative(path.resolve(base), file) : '..';
+  if (inside.startsWith('..') || path.isAbsolute(inside)) process.exit(0);
+  root = path.resolve(base);
+}
 if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');
@@ -88,38 +94,7 @@ if (!ranges.length) process.exit(0);
 
 // ---------- 附近的行 ----------
 
-// 哪些行是注释。行注释和 `*` 开头的块注释续行按前缀认，JSX 的 `{/* … */}` 也认；
-// `/* … */`、`<!-- … -->` 和行首的三引号 docstring 跨行时，中间没有前缀的行也算（CSS 只有这种块注释）。
-// 没闭合的块不算，免得把后面整份文件当成注释；赋值给变量的三引号字符串不是注释，但要整段跳过，
-// 否则收尾的那一行三引号会被当成新的开头
-const COMMENT_RE = /^(\/\/|\/\*|\*|#|--|<!--|;|%|\{\s*\/\*)/;
-const BLOCK_OPEN_RE = /^(?:\{\s*)?(\/\*|<!--)/;
-const CLOSE = { '/*': '*/', '<!--': '-->', '"""': '"""', "'''": "'''" };
-const comment = new Array(lines.length).fill(false);
-const docstring = new Array(lines.length).fill(false);
-for (let k = 0; k < lines.length; k++) {
-  const t = lines[k].trim();
-  if (COMMENT_RE.test(t)) comment[k] = true;
-  let open = null;
-  let at = 0;
-  let doc = false;
-  const m = t.match(BLOCK_OPEN_RE);
-  if (m) {
-    open = m[1];
-    at = m[0].length;
-  } else if (!comment[k]) {
-    const q = t.search(/"""|'''/);
-    if (q === -1) continue;
-    open = t.slice(q, q + 3);
-    at = q + 3;
-    doc = /^[rRuUbBfF]{0,2}$/.test(t.slice(0, q));
-  } else continue;
-  let end = t.indexOf(CLOSE[open], at) !== -1 ? k : -1;
-  for (let j = k + 1; end === -1 && j < lines.length; j++) if (lines[j].includes(CLOSE[open])) end = j;
-  if (end === -1) continue;
-  if (m || doc) for (let j = k; j <= end; j++) { comment[j] = true; docstring[j] = doc; }
-  k = end;
-}
+const { comment, docstring } = commentLines(lines);
 const isComment = (k) => comment[k];
 const blank = (k) => !lines[k].trim();
 const indent = (k) => lines[k].match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
@@ -162,11 +137,14 @@ for (const [s, e] of ranges) {
 // 文件头注释：整个文件的约定写在这里（跳过 shebang 和空行）。一段注释后面是空行、import 之类或文件结尾才算文件头；
 // 紧贴着一个声明的那一段是那个声明的注释，不算：否则指针写在第一个常量上方的文件，改哪里都会被它拦
 const IMPORT_RE = /^(?:(?:import|from|package|use|using|require|include|namespace|module|mod|extern|source)\b|set\s+-|['"]use |@(?:import|use|charset|forward)\b|(?:const|let|var)\s.*=\s*require\()/;
+// 有些文件的第一行不能是注释：PHP 的 `<?php`（和紧跟的 declare）、'use client' 这类指令、Vue / Svelte 的 `<script …>`。
+// 这些行不算代码，它上面的注释照样是文件头，它下面接着找
+const PREAMBLE_RE = /^(?:<\?(?:php\b.*)?$|declare\s*\(|(['"])use [\w ]+\1;?$|<script\b[^>]*>$)/;
 let run = [];
 let h = 0;
 for (; h < lines.length; h++) {
   if (h === 0 && lines[h].startsWith('#!')) continue;
-  if (blank(h)) { for (const x of run) near.add(x); run = []; continue; }
+  if (blank(h) || PREAMBLE_RE.test(lines[h].trim())) { for (const x of run) near.add(x); run = []; continue; }
   if (!isComment(h)) break;
   run.push(h);
 }
@@ -192,19 +170,88 @@ if (!hits.length) process.exit(0);
 // 先查拦过没有，再去读转录：拦过的指针不用为它把整份转录读一遍。
 // 按指针那一行的文本记，不按行号：文件上方增删行之后还认得出是同一处
 const rel = path.relative(root, file).split(path.sep).join('/');
-// { 指针的 key: 拦下它的时间戳 }。0.5.1 及以前存的是 key 数组，时间按 0 算
-let warned = {};
+// { 指针的 key: { t: 拦下它的时间戳, m: 当时那次工具调用所在的 assistant 消息 id，查不到是 null } }。
+// 0.5.3 及以前存的是时间戳，0.5.1 及以前是 key 数组（时间按 0 算）
+const warned = {};
 try {
   const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-  if (Array.isArray(saved)) for (const x of saved) warned[x] = 0;
-  else if (saved && typeof saved === 'object') warned = saved;
+  if (Array.isArray(saved)) for (const x of saved) warned[x] = { t: 0, m: null };
+  else if (saved && typeof saved === 'object') {
+    for (const [x, v] of Object.entries(saved)) {
+      if (typeof v === 'number') warned[x] = { t: v, m: null };
+      else if (v && typeof v.t === 'number') warned[x] = { t: v.t, m: typeof v.m === 'string' ? v.m : null };
+    }
+  }
 } catch {}
 const key = ({ doc, k }) => crypto.createHash('sha1').update([root, rel, doc, lines[k].trim()].join('\n')).digest('hex').slice(0, 16);
+
+// 子代理的转录在 <主转录去掉 .jsonl>/subagents/ 下（可能再隔一层子目录），文件名 agent-<agent_id>.jsonl。
+// 找不到就当没读过：最多多拦一次
+function agentTranscript(main, id) {
+  const want = `agent-${id}.jsonl`;
+  const walk = (dir, depth) => {
+    let list;
+    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const e of list) if (e.isFile() && e.name === want) return path.join(dir, e.name);
+    if (depth > 0) for (const e of list) {
+      const found = e.isDirectory() ? walk(path.join(dir, e.name), depth - 1) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(path.join(main.replace(/\.jsonl$/, ''), 'subagents'), 2);
+}
+let transcriptPath; // undefined：还没找
+const transcriptFile = () => {
+  if (transcriptPath === undefined) {
+    transcriptPath = (input.transcript_path && agentId ? agentTranscript(input.transcript_path, agentId) : input.transcript_path) || null;
+  }
+  return transcriptPath;
+};
+
+// 这次工具调用在哪条 assistant 消息里：同一条消息的几个工具调用在转录里各占一行，message.id 相同。
+// 那一行就在转录末尾，只读最后 1MB；查不到（转录还没落盘、没有 tool_use_id）返回 null
+let msgId; // undefined：还没查
+const currentMsg = () => {
+  if (msgId !== undefined) return msgId;
+  msgId = null;
+  const id = typeof input.tool_use_id === 'string' ? input.tool_use_id : '';
+  const tf = id && transcriptFile();
+  if (!tf) return msgId;
+  try {
+    const fd = fs.openSync(tf, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, 1 << 20);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      const tail = buf.toString('utf8').split('\n');
+      for (let i = tail.length - 1; i >= 0 && msgId === null; i--) {
+        if (!tail[i].includes(id)) continue;
+        try {
+          const o = JSON.parse(tail[i]);
+          const content = o.type === 'assistant' && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+          if (typeof o.message.id === 'string' && content.some((c) => c.type === 'tool_use' && c.id === id)) msgId = o.message.id;
+        } catch {}
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {}
+  return msgId;
+};
+
 // 同一条消息里对同一处的几个 Edit 是挨个触发 hook 的：第一个被拦时 Claude 还没看到拦截消息，后面几个不能直接放行。
-// 所以拦下之后的一小段时间内继续拦；Claude 看到消息后再提交，早就过了这段时间
+// 所以和拦下它的那次调用在同一条 assistant 消息里的继续拦，换了一条消息（Claude 已经看到拦截消息）才放行。
+// 查不到消息 id 时退回按时间算：拦下之后的一小段时间内继续拦
 const REPEAT_MS = 3000;
 const now = Date.now();
-const settled = (x) => typeof warned[key(x)] === 'number' && now - warned[key(x)] > REPEAT_MS;
+const settled = (x) => {
+  const w = warned[key(x)];
+  if (!w) return false;
+  const cur = w.m ? currentMsg() : null;
+  return cur ? cur !== w.m : now - w.t > REPEAT_MS;
+};
 let todo = hits.filter((x) => !settled(x));
 if (!todo.length) process.exit(0);
 
@@ -226,25 +273,9 @@ const bashReads = (cmd, tail) => cmd.split(/&&|\|\||[;|\n]/).some((seg) => {
   const name = path.basename(words[0] || '');
   return READ_CMDS.has(name) || (name === 'sed' && words.includes('-n'));
 });
-// 子代理的转录在 <主转录去掉 .jsonl>/subagents/ 下（可能再隔一层子目录），文件名 agent-<agent_id>.jsonl。
-// 找不到就当没读过：最多多拦一次
-function agentTranscript(main, id) {
-  const want = `agent-${id}.jsonl`;
-  const walk = (dir, depth) => {
-    let list;
-    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-    for (const e of list) if (e.isFile() && e.name === want) return path.join(dir, e.name);
-    if (depth > 0) for (const e of list) {
-      const found = e.isDirectory() ? walk(path.join(dir, e.name), depth - 1) : null;
-      if (found) return found;
-    }
-    return null;
-  };
-  return walk(path.join(main.replace(/\.jsonl$/, ''), 'subagents'), 2);
-}
 try {
-  const transcriptPath = input.transcript_path && agentId ? agentTranscript(input.transcript_path, agentId) : input.transcript_path;
-  const transcript = transcriptPath ? fs.readFileSync(transcriptPath, 'utf8') : '';
+  const tf = transcriptFile();
+  const transcript = tf ? fs.readFileSync(tf, 'utf8') : '';
   const tails = [...unread].map(tailOf);
   for (const l of transcript.split('\n')) {
     if (l.includes('"compact_boundary"')) {
@@ -277,8 +308,8 @@ try {
 todo = todo.filter((x) => !seen.has(x.doc));
 if (!todo.length) process.exit(0);
 try {
-  // 已经记过时间的不刷新：窗口从第一次拦下算起，重试不会被一直顺延
-  for (const x of todo) if (typeof warned[key(x)] !== 'number') warned[key(x)] = now;
+  // 已经记过的不刷新：按第一次拦下它的那条消息、那个时间算，重试不会被一直顺延
+  for (const x of todo) if (!warned[key(x)]) warned[key(x)] = { t: now, m: currentMsg() };
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   fs.writeFileSync(stateFile, JSON.stringify(warned));
 } catch {

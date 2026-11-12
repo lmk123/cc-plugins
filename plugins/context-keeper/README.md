@@ -54,7 +54,7 @@ const MAX_RETRY = 3;
 
 - 代码注释：读到那段代码时就在眼前，扩展内容的指针也在这里。
 - rule：碰到匹配的文件时自动加载。
-- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段）；同一会话每处指针只拦一次（拦下后 3 秒内对同一处的编辑继续拦，免得同一条消息里的后几个 Edit 漏过去），文档读过（Read 成功，或 Bash 里用 cat / head / tail 这类命令读过；读失败、`git add` 这类只是提到路径的不算）之后指向它的指针都不再拦，主会话压缩上下文后拦过、读过都重新算；主会话和每个子代理各算各的。行注释、块注释（含 JSX 的 `{/* */}`）和 Python docstring 里的指针都认。拦截消息里带文档的绝对路径，会话开在子目录里也不会拼错。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
+- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段，开头的 `<?php`、`'use client'`、`<script>` 标签跳过）；同一会话每处指针只拦一次（和拦下它的那次编辑在同一条消息里的后几个 Edit 继续拦，免得漏过去），文档读过（Read 成功，或 Bash 里用 cat / head / tail 这类命令读过；读失败、`git add` 这类只是提到路径的不算）之后指向它的指针都不再拦，主会话压缩上下文后拦过、读过都重新算；主会话和每个子代理各算各的。行注释、块注释（含 JSX 的 `{/* */}`）和 Python docstring 里的指针都认。拦截消息里带文档的绝对路径，会话开在子目录里也不会拼错。不是 git 仓库的项目，拿启动会话的目录当项目根。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
 - 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是领域里多处都该知道、又不属于某一处的长文档清单。
 - 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
 
@@ -71,7 +71,7 @@ const MAX_RETRY = 3;
   node <插件目录>/scripts/check.mjs [路径] [--comments]
   ```
 
-  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、没写"什么时候读"的指针、`@` import、`.claude/rules/`、`.claude/skills/`、`.context/` 有没有被 `.gitignore` 忽略、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，其他 Markdown 和代码块里的示例路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
+  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、没写"什么时候读"的指针、`@` import、`.claude/rules/`、`.claude/skills/`、`.context/` 有没有被 `.gitignore` 忽略、文档命名、失效指针、孤儿文档、文档入口有没有被根 CLAUDE.md 指到等，失效指针只查 CLAUDE.md、rule、skill、`.context/` 文档和源码里的注释，其他 Markdown、代码块里的示例路径和源码字符串里的路径不算。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
 
 ## 改造前后
 
@@ -128,5 +128,13 @@ const MAX_RETRY = 3;
 - 判据："涉及几个文件"按谁需要知道算。约束调用方的（"必须在 X 之后调用"）写进定义处的 API 文档注释，或写成 `paths` 覆盖调用方的 rule，不写成定义上方的普通注释
 - `organize-context`：迁移模式的作用域也处理脚本报出的问题和已有的文档；只有 rule、还没有 `.context/` 的作用域明确算体检；执行时被 pointer-guard 拦下是预期的，直接重试
 - 加了测试，改脚本后跑 `node --test "plugins/context-keeper/tests/*.test.mjs"`
+
+0.5.4 修了几处评审发现的问题：
+
+- pointer-guard：文件头注释前面的 `<?php`、`'use client'` 这类指令、Vue / Svelte 的 `<script>` 标签不再算代码（原来 PHP 文件、指令写在注释前面的文件里，文件头的指针不拦）
+- pointer-guard："拦下后继续拦"改成按消息算：和拦下它的那次编辑在同一条消息里的继续拦，Claude 看到拦截消息后重新提交的放行。原来按 3 秒算，重试得快会被多拦一次，同一条消息里隔了一个慢命令的第二个 Edit 又会漏过去；查不到消息 id 时仍按 3 秒算
+- pointer-guard：不是 git 仓库的项目，拿启动会话的目录当项目根（原来整个不生效）
+- 检查脚本：源码里只查注释里的指针，字符串里的路径（输出文件名、测试数据）不再报失效、不再报没写什么时候读，指得到文档的照样算已登记
+- 检查脚本：只匹配一个生成物或 lockfile 的 rule 不再报单文件 rule（`generated/` 目录、`.generated.` / `.pb.` 这类文件名、`pnpm-lock.yaml`，或文件头几行写着 generated / do not edit）；`record-context` 写明这类 rule 保留
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。
