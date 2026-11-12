@@ -123,14 +123,24 @@ test('折行的登记行：重点在上一行、路径落在下一行开头的�
   ]), [2, 6]);
 });
 
-test('路径打头的几种写法都报没有重点：./ 前缀、编号列表、链接标题、加粗标题、重点写在路径后面', () => {
+test('路径打头的几种写法都报没有重点：./ 前缀、编号列表、引用块、勾选框、重点写在路径后面', () => {
   assert.deepEqual(bareLinesOf([
     'api 相关的项目文档：',
     '1. `./.context/api/retry-policy.md`：改重试次数前',
-    '- [重试策略](.context/api/retry-policy.md)：改重试次数前',
-    '- **分期付款** `.context/payment/installments.md`：新增错误码前',
+    '- [ ] `.context/payment/installments.md`：新增错误码前',
     '- `.context/api/retry-policy.md`：网关连续 5 次失败封 IP。改重试次数前读',
     '> - `.context/api/retry-policy.md`：改重试次数前',
+  ]), [2, 3, 4, 5]);
+});
+
+test('路径前面只有引导词、箭头、emoji 的也算路径打头', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '- 见 `.context/api/retry-policy.md`，改重试次数前读',
+    '- 文档：`.context/payment/installments.md`，新增错误码前读',
+    '- → `.context/api/retry-policy.md`：改重试次数前读',
+    '- 📄 `.context/payment/installments.md`：新增错误码前读',
+    '- [文档](.context/api/retry-policy.md)：改重试次数前读',
   ]), [2, 3, 4, 5, 6]);
 });
 
@@ -195,30 +205,36 @@ test('正文只有指针的 rule：以冒号、"按需读"结尾的结论和表�
   assert.ok(hit('table-only.md'));
 });
 
-test('折行的登记行：上一行带"按需读"的重点、纯参考的"什么时候读"算上半句，单独一行的标题和没以冒号结尾的引言不算', () => {
+test('折行的登记行：上一行有话就算上半句（脚本不判断是标题还是重点），没以冒号结尾的引言和只有引导词的不算', () => {
   assert.deepEqual(bareLinesOf([
     '- 网关连续 5 次失败封 IP，细节按需读。改重试次数前读',
     '  `.context/api/retry-policy.md`',
     '- 新增错误码前读',
     '  `.context/payment/installments.md`',
+    '- 并发请求共用同一次 token 刷新',
+    '  `.context/api/retry-policy.md`：改登录态刷新前读',
   ]), []);
   assert.deepEqual(bareLinesOf([
-    '- 重试策略',
-    '  `.context/api/retry-policy.md`：改重试次数前',
+    '- 详见：',
+    '  `.context/api/retry-policy.md`，改重试次数前读',
     '',
     'api 相关的项目文档。改动前先看有没有相关的。',
     '`.context/payment/installments.md`：新增错误码前',
   ]), [2, 5]);
 });
 
-test('链接文字、加粗里写的是重点时不报没有重点，是标题（冒号写在加粗里面的也算）时照报', () => {
+test('路径前面有链接文字、加粗的不报没有重点：是标题还是重点脚本不判断，带"会"的、英文的结论不误报', () => {
   assert.deepEqual(bareLinesOf([
     'api 相关的项目文档：',
     '- [网关连续 5 次失败封 IP 10 分钟](.context/api/retry-policy.md)：改重试次数前读',
     '- **网关会封 IP** `.context/api/retry-policy.md`：改重试次数前读',
+    '- [宕机会丢未落盘的数据](.context/api/retry-policy.md)：改重试次数前读',
+    '- **服务商会封 IP** `.context/api/retry-policy.md`：改重试次数前读',
+    '- [token 只刷新一次](.context/api/retry-policy.md)：改登录态刷新前读',
+    '- [Gateway bans the IP on repeated failures](.context/api/retry-policy.md): read before changing retries',
     '- **重试策略：** `.context/api/retry-policy.md`，改重试次数前读',
-    '- **会话管理** `.context/payment/installments.md`：新增错误码前',
-  ]), [4, 5]);
+    '- [会话管理](.context/payment/installments.md)：新增错误码前',
+  ]), []);
 });
 
 test('引出列表的话里数的是文档份数时照样算引言，下一行路径打头的照报', () => {
@@ -228,23 +244,24 @@ test('引出列表的话里数的是文档份数时照样算引言，下一行�
   ]), [2]);
 });
 
-test('含"会"的名词（年会、大会）当标题，"会 …"（每年会、网关会）当重点', () => {
-  assert.deepEqual(bareLinesOf([
-    'api 相关的项目文档：',
-    '- [年会抽奖](.context/api/retry-policy.md)：改重试次数前',
-    '- **大会报名** `.context/payment/installments.md`：新增错误码前',
-    '- [每年会清理一次](.context/api/retry-policy.md)：改重试次数前读',
-    '- **网关会封 IP** `.context/api/retry-policy.md`：改重试次数前读',
-  ]), [2, 3]);
-});
-
-test('正文只有指针的 rule：单独一行的标题、下一行接着写路径的，和领域索引里一样报', () => {
+test('正文只有指针的 rule：没以冒号结尾的引言后面跟着登记行、HTML 注释、分隔线都不算正文', () => {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const bare = '- `.context/api/retry-policy.md`：改重试次数前读';
+  const rule = (...lines) => `${fm}${lines.join('\n')}\n`;
   const r = check(makeRepo({
     ...CLEAN,
     'src/api/b.ts': 'export const B = 1;\n',
-    '.claude/rules/api/retry.md': '---\npaths:\n  - "src/api/*.ts"\n---\n\n- 重试策略\n  `.context/api/retry-policy.md`：改重试次数前\n',
+    '.claude/rules/api/intro.md': rule('重试相关的项目文档。改动前先看有没有相关的。', '', bare),
+    '.claude/rules/api/note.md': rule('<!-- 自动生成 -->', bare),
+    '.claude/rules/api/hr.md': rule('***', bare),
+    // 提到文档、但后面紧跟的不是登记行的话是正文
+    '.claude/rules/api/prose.md': rule('接口文档用 OpenAPI 生成。', '', '## 相关', bare),
   }));
-  assert.ok(r.findings.some((f) => f.file.endsWith('retry.md') && f.line === 7 && /没有重点/.test(f.msg)));
+  const hit = (name) => r.findings.some((f) => f.file.endsWith(name) && /没有重点/.test(f.msg));
+  assert.ok(hit('intro.md'));
+  assert.ok(hit('note.md'));
+  assert.ok(hit('hr.md'));
+  assert.ok(!hit('prose.md'));
 });
 
 test('指向另一个文档入口的登记行不报没有重点', () => {

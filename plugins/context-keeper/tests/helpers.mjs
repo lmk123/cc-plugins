@@ -77,8 +77,11 @@ export function commentHook(t, { file, tool = 'Write', response }) {
 }
 
 // 模拟 Write / Edit 改了文档之后触发 doc-hook。返回提醒文字，没提醒时返回 null
-export function docHook(t, { file, tool = 'Edit', env }) {
+// session 不传时 hook 拿不到会话 id，不记状态，每次都给完整清单
+export function docHook(t, { file, tool = 'Edit', env, session, agent }) {
   const out = run('doc-hook.mjs', {
+    ...(session ? { session_id: session } : {}),
+    ...(agent ? { agent_id: agent } : {}),
     cwd: t.repo,
     tool_name: tool,
     tool_input: { file_path: path.join(t.repo, file) },

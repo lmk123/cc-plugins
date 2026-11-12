@@ -10,12 +10,10 @@
 // 只管非 Markdown 文件里的指针（Markdown 里的路径多半是示例）；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { commentLines, findRoot, pointersIn, resolvePointer } from './lib/pointers.mjs';
-
-if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
+import { MARKDOWN_RE, commentLines, findRoot, pointersIn, resolvePointer } from './lib/pointers.mjs';
+import { stateFile as stateFileFor } from './lib/state.mjs';
 
 let input;
 try {
@@ -24,24 +22,27 @@ try {
   process.exit(0);
 }
 
-const safe = (s) => String(s).replace(/[^\w-]/g, '_').slice(0, 120);
-const sid = safe(input.session_id || input.transcript_path || 'unknown');
 // 子代理里 session_id、transcript_path 都是主会话的，靠 agent_id 区分：状态各记各的
 const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null;
-const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}${agentId ? `.${safe(agentId)}` : ''}.json`);
+const stateFile = stateFileFor(input);
 
-// 压缩之后，拦截消息和读过的文档都不在 context 里了：清掉状态，下次改到时重新拦
+// 压缩之后，拦截消息和读过的文档都不在 context 里了：清掉状态，下次改到时重新拦。
+// doc-hook 提醒过的清单也不在了，它的状态一起清（SessionStart 只挂了这一个脚本）；关掉 pointer-guard 时照样清
 if (input.hook_event_name === 'SessionStart') {
-  if (input.source === 'compact') try { fs.rmSync(stateFile, { force: true }); } catch {}
+  if (input.source === 'compact') {
+    for (const f of [stateFile, stateFileFor(input, 'doc')]) try { fs.rmSync(f, { force: true }); } catch {}
+  }
   process.exit(0);
 }
+
+if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
 
 const tool = input.tool_name;
 const ti = input.tool_input || {};
 if (!['Edit', 'MultiEdit', 'Write'].includes(tool) || !ti.file_path) process.exit(0);
 const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
 // 不按扩展名表筛：表里没有的格式（.proto、.graphql……）照样能写注释指针。没有指针的文件下面自然放行
-if (/\.(md|mdx|markdown)$/i.test(file)) process.exit(0);
+if (MARKDOWN_RE.test(file)) process.exit(0);
 
 // 项目根取离文件最近的 .git。不是 git 仓库时用启动会话的目录（check.mjs 在非 git 目录里也是拿运行目录当根），
 // 文件不在它下面就不管

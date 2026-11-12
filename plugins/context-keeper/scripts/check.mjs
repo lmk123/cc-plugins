@@ -499,69 +499,59 @@ const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p)
 const resolvePointer = (p) => resolveWith(p, pointerExists);
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
 const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_ITEM_RE, '').replace(/^\[[ xX]\]\s+/, '');
-// 下面几个判断都是机械的，靠的是一句话里有没有结论的特征：约束词（"必须 / 不能 / 上限"）和数字
-// （"5 次""上限 3"；v2、OAuth2、HTTP/2 这类名字里的不算）。不带这些特征的短结论认不出来，要 organize-context 读内容看
+// 下面几个判断都是机械的：只看路径前面（或折行时的上一行）有没有话，不判断那句话是文档标题还是重点。
+// 「[重试策略](路径)」「- 重试策略」这种只有标题的登记行认不出来，要 organize-context 读内容看：
+// 标题和短结论靠字面分不开（"会话管理"和"网关会封 IP"），猜错了会让人去改一行本来正确的登记行
 const CONSTRAINT_RE = /必须|务必|不能|不可|不要|不许|不得|禁止|只能|最多|最少|至多|至少|上限|下限|超过|\b(?:must|never|always|at most|at least|do not|don't|cannot|can't)\b/i;
-const NUMBER_RE = /(?<![A-Za-z\d/_-])\d/;
-// 引出登记行的话（"api 相关的项目文档，改动前按需读："）：提到文档、以冒号或"按需读"结尾、本身不带结论。
+const NUMBER_RE = /(?<![A-Za-z\d/_-])\d/; // "5 次""上限 3"；v2、OAuth2、HTTP/2 这类名字里的不算
+// 引出登记行的话（"api 相关的项目文档，改动前按需读："）：提到文档、本身不带结论（约束词、数字）。
 // 按"提到文档"来认，不按"以冒号结尾"来认："网关连续失败会封 IP，细节："这种结论也以冒号结尾
 const DOC_WORD_RE = /文档|资料|参考|详见|背景|\b(?:docs?|documents?|documentation|references?|see also|background)\b/i;
 // "以下 2 份文档""3 docs" 数的是文档本身，不是结论里的数字
 const DOC_COUNT_RE = /\d+\s*(?:份|篇)|\d+\s*(?:个|条|项)(?=[^，。；：,;:]{0,6}(?:文档|资料|参考))|\b\d+\s+(?:docs?|documents?|references?)\b/gi;
 const introducesDocs = (t) => DOC_WORD_RE.test(t) && !CONSTRAINT_RE.test(t) && !NUMBER_RE.test(t.replace(DOC_COUNT_RE, ''));
-// 标题、表格行和引出登记行的话：不是重点，也不是折行登记行的上半句
+// 标题、表格行、HTML 注释，以及以冒号或"按需读"结尾的引言：不是重点，也不是折行登记行的上半句
 function isLead(line) {
   const t = line.trim();
-  return /^[#|]/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
+  return /^(?:[#|]|<!--)/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
 }
-// 一段文字只是文档标题（"重试策略"），还是重点（"重试上限 3""网关会封 IP"）：标题不带句内标点、数字、约束词和"会 …"。
-// 含"会"的常见名词（会话、机会、年会、大会……）先去掉，剩下的"会"才算"会 …"。年、大、工和"会"连着时也常是
-// "每年会""量大会""员工会"，要再看前面一个字
-const HUI_NOUN_RE = /(?:机|社|协|学|体|约|聚|开|晚|宴|舞|例|峰|茶|酒|庙|盛|商|教|帮|展|省|议|公|博览|理事|委员|董事|股东|(?<![每今明去])年|(?<![量很太较更最过])大|(?<![员职])工)会|会(?:话|员|议|计|场|谈|面|签|诊|合|务|所|长|期|费|展|籍)/g;
-const hasWill = (t) => t.replace(HUI_NOUN_RE, '').includes('会');
-function isTitle(s) {
-  const t = s.replace(/[`*_]/g, '').trim().replace(/[：:]$/, '');
-  return !/[，。；：,;:!?！？]|\.(?:\s|$)/.test(t) && !NUMBER_RE.test(t) && !CONSTRAINT_RE.test(t) && !hasWill(t);
-}
-// 登记行的重点有没有写在路径前面（「重点。改 X 前读 路径」）。认得出的是路径打头的行：路径前面只剩列表符号、
-// 引号、表格竖线这类标记，或者只有文档标题（`[标题](路径)` 的链接文字、单独一段加粗；写的是重点时不算）。
+// 顶格写、只是提到文档的话（"api 相关的项目文档。改动前先看有没有相关的。"）：没以冒号结尾的引言
+const mentionsDocsOnly = (line) => /^\S/.test(line) && !LIST_ITEM_RE.test(line) && introducesDocs(line.trim());
+// 一段文字去掉标点、符号、emoji 之后剩下的字。什么都不剩，或只剩"见""文档"这类不带信息的引导词，等于没有话
+const wordsOf = (s) => s.replace(/[^\p{L}\p{N}]/gu, '');
+const LEAD_IN_RE = /^(?:详见|参见|参考|见|文档|链接|这里|seealso|see|referto|docs?|link|here)?$/i;
+// 登记行是不是路径打头：路径前面只剩列表符号、引号、表格竖线、箭头这类标记，或者只有"见""文档："这类引导词。
+// 路径前面有别的话（含链接文字、加粗）就不算，那句话是标题还是重点脚本不判断。
 // 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算。
 // 指向另一个文档入口的行也不算：入口是清单，不是文档，没有重点可提
 function pathFirst(line, raw) {
   if (ENTRY_RE.test(raw)) return false;
-  const head = stripItemMarks(line.slice(0, line.indexOf(raw)).replace(/\.\/$/, '')) // pointersIn 去掉了路径开头的 ./
-    .replace(/\[([^\]]*)\]\($/, (m, s) => (isTitle(s) ? '' : m))
-    .replace(/^(\*\*|__)(.+?)\1[\s：:—–-]*(?=`?$)/, (m, q, s) => (isTitle(s) ? '' : m))
-    .replace(/[\s`*_"'“”‘’「」《》<(（[|>]/g, '');
-  return head === '' && resolvePointer(raw) === raw;
+  return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, line.indexOf(raw))))) && resolvePointer(raw) === raw;
 }
-// 折行的登记行，上一行是不是它的上半句：重点，或纯参考的"什么时候读"。标题、表格行、引出登记行的话不是；
-// 单独一行的文档标题（"- 重试策略"）不是；顶格写、只是提到文档的话（没以冒号结尾的引言）也不是
+// 折行的登记行，上一行是不是它的上半句（重点，或纯参考的"什么时候读"）：有话，而且不是标题、表格行、引言
 function carriesHead(prev) {
-  const t = stripItemMarks(prev).trim();
-  if (!t || isLead(prev)) return false;
-  if (/^\S/.test(prev) && !LIST_ITEM_RE.test(prev) && introducesDocs(t)) return false;
-  return !isTitle(t) || TRIGGER_RE.test(t);
+  return !LEAD_IN_RE.test(wordsOf(stripItemMarks(prev))) && !isLead(prev) && !mentionsDocsOnly(prev);
 }
 // rule 正文里除了指针行、标题和引出登记行的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
 // 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算。
-// 折行登记行的上半句不是重点（单独一行的标题"- 重试策略"，下一行接着写路径）时，和领域索引里一样算登记行的一部分。
-// 表格只有表头和分隔行不算，不带指针的数据行是正文
+// 顶格写、只是提到文档的话，后面紧跟着登记行（中间可以隔空行）时是引言，不算；后面是别的话时算正文。
+// 表格只有表头和分隔行不算，不带指针的数据行是正文；分隔线（---）不算。代码块是正文：rule 里的代码示例就是"怎么做"
 const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
+const HR_RE = /^([-*_])(?:\s*\1){2,}$/;
 function hasOwnContent(text) {
   const fm = parseFrontmatter(text);
   const lines = fm ? fm.body : text.split(/\r?\n/);
   let afterPointer = false;
   return lines.some((l, i) => {
     const t = l.trim();
-    if (!t) { afterPointer = false; return false; }
+    if (!t || HR_RE.test(t)) { afterPointer = false; return false; }
     if (pointersIn(l).length) { afterPointer = true; return false; }
     afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
     if (afterPointer) return false;
     if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
-    const next = lines[i + 1] || '';
-    if (pointersIn(next).length && !LIST_ITEM_RE.test(next)) return carriesHead(l);
-    return !isLead(l);
+    if (!mentionsDocsOnly(l)) return carriesHead(l);
+    const next = lines.slice(i + 1).find((x) => x.trim());
+    return !(next && pointersIn(next).length);
   });
 }
 for (const f of filesMentioningContext()) {

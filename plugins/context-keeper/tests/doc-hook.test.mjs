@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeRepo, docHook } from './helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { SCRIPTS, makeRepo, docHook, sessionStart } from './helpers.mjs';
 
 const DOC = '.context/api/retry-policy.md';
 const REPO = {
@@ -63,4 +66,45 @@ test('指到它的行超过 10 处时只列 10 处，其余给出数目', () => 
 
 test('CONTEXT_KEEPER_DOC_HOOK=0 时关闭', () => {
   assert.equal(docHook(makeRepo(REPO), { file: DOC, env: { CONTEXT_KEEPER_DOC_HOOK: '0' } }), null);
+});
+
+test('同一会话里同一份文档：清单只给一次，之后清单没变时只提醒一行', () => {
+  const t = makeRepo(REPO);
+  assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
+  const again = docHook(t, { file: DOC, session: 's1' });
+  assert.match(again, /又改了 \.context\/api\/retry-policy\.md：指到它的 3 处/);
+  assert.equal(again.split('\n').length, 1);
+  // 另一个会话、同一会话里的子代理各算各的：它们的 context 里没有那份清单
+  assert.match(docHook(t, { file: DOC, session: 's2' }), /被下面几处指到/);
+  assert.match(docHook(t, { file: DOC, session: 's1', agent: 'a1' }), /被下面几处指到/);
+});
+
+test('清单变了、主会话压缩上下文之后重新给完整清单', () => {
+  const t = makeRepo(REPO);
+  docHook(t, { file: DOC, session: 's1' });
+  fs.writeFileSync(path.join(t.repo, 'src/api/backoff.ts'), `// 退避上限 30 秒。改退避前读 ${DOC}\n`);
+  assert.match(docHook(t, { file: DOC, session: 's1' }), /- src\/api\/backoff\.ts:1/);
+  assert.match(docHook(t, { file: DOC, session: 's1' }), /又改了/);
+  sessionStart(t, { session: 's1', source: 'compact' });
+  assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
+});
+
+// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没提到 .context 就不起 node。这段只有真跑一遍才测得到
+test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录的 payload 不出声', { skip: process.platform === 'win32' }, () => {
+  const plugin = path.join(SCRIPTS, '..');
+  const hooks = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;
+  const cmd = hooks.flatMap((h) => h.hooks).map((h) => h.command).find((c) => c.includes('doc-hook.mjs'));
+  const t = makeRepo(REPO);
+  const run = (file) => spawnSync('sh', ['-c', cmd], {
+    // 反斜杠、百分号、引号、$ 和反引号：shell 转手时最容易被改掉的几种字符
+    input: JSON.stringify({ cwd: t.repo, tool_name: 'Edit', tool_input: { file_path: path.join(t.repo, file), old_string: 'a\\n%s "q" \\\\ $HOME `x`', new_string: "it's 100%\n" } }),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, TMPDIR: t.tmp },
+  });
+  const hit = run(DOC);
+  assert.equal(hit.status, 0);
+  assert.match(JSON.parse(hit.stdout).hookSpecificOutput.additionalContext, /被下面几处指到/);
+  const miss = run('src/api/retry.ts');
+  assert.equal(miss.status, 0);
+  assert.equal(miss.stdout, '');
 });

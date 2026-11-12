@@ -3,17 +3,20 @@
 // （领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码注释里的指针），提醒 Claude：文档里的结论变了，这些行里的重点要跟着改。
 // 这些行里的重点是从文档提炼的，文档改了它们不会自己变，而 Claude 看了重点多半不会再去读文档。
 // 只提醒，不阻断；没有任何一处指到的文档（比如刚新建的）不提醒。设环境变量 CONTEXT_KEEPER_DOC_HOOK=0 可关闭。
+// 同一会话里同一份文档，清单只给一次：之后再改它、清单没变时只提醒一行，清单变了或压缩上下文之后重新给。
 //
 // 指到它的行和 check.mjs 同一套口径：Markdown 代码块里的示例、源码字符串里的路径不算。
 // 用 git grep 找，所以不是 git 仓库的项目不提醒。出任何意外都静默退出。
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
   DOC_RE, ENTRY_RE, MARKDOWN_RE, commentLines, findRoot, inComment, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
 } from './lib/pointers.mjs';
+import { stateFile } from './lib/state.mjs';
 
 if (process.env.CONTEXT_KEEPER_DOC_HOOK === '0') process.exit(0);
 
@@ -27,7 +30,6 @@ try {
 const ti = input.tool_input || {};
 if (!['Write', 'Edit', 'MultiEdit'].includes(input.tool_name) || !ti.file_path) process.exit(0);
 const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
-if (!/\.md$/.test(file)) process.exit(0);
 
 // 指针写的是项目根起的路径。不是 git 仓库时下面的 git grep 会失败退出
 const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
@@ -71,12 +73,31 @@ for (const f of r.stdout.split('\0').filter(Boolean)) {
 }
 if (!rows.length) process.exit(0);
 
-const msg = [
-  `[context-keeper] 刚改的 ${doc} 被下面${rows.length + more > 1 ? '几' : '这一'}处指到，每一行里的重点都是从这份文档提炼的：`,
-  ...rows,
-  ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
-  '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
-].join('\n');
+// 一份文档常常连着改好几次，每次都贴一遍清单只是占 context：本会话已经给过同样的清单时只提醒一行。
+// 状态按会话（子代理各算各的）记在临时目录里，主会话压缩上下文后由 pointer-guard 清掉。
+// 拿不到会话 id 时不记，每次都给清单；状态读写失败也照常给
+const sf = input.session_id || input.transcript_path ? stateFile(input, 'doc') : null;
+const key = crypto.createHash('sha1').update(`${root}\n${doc}`).digest('hex').slice(0, 16);
+const digest = crypto.createHash('sha1').update(`${rows.join('\n')}\n${more}`).digest('hex').slice(0, 16);
+let shown = {};
+if (sf) try { shown = JSON.parse(fs.readFileSync(sf, 'utf8')); } catch {}
+const repeat = Boolean(shown[key] && shown[key].h === digest);
+if (sf && !repeat) {
+  try {
+    shown[key] = { h: digest, t: Date.now() };
+    fs.mkdirSync(path.dirname(sf), { recursive: true });
+    fs.writeFileSync(sf, JSON.stringify(shown));
+  } catch {}
+}
+
+const msg = repeat
+  ? `[context-keeper] 又改了 ${doc}：指到它的 ${rows.length + more} 处（清单见本会话前面的提醒）里，重点跟着不成立的，同一次改动里改掉。`
+  : [
+    `[context-keeper] 刚改的 ${doc} 被下面${rows.length + more > 1 ? '几' : '这一'}处指到，每一行里的重点都是从这份文档提炼的：`,
+    ...rows,
+    ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
+    '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
+  ].join('\n');
 
 process.stdout.write(JSON.stringify({
   hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: msg },
