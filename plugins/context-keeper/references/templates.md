@@ -2,9 +2,52 @@
 
 下面每个示例上方标注的是文件路径，不是文件内容。所有指向文档的路径都从仓库根写起。
 
+## 指针
+
+注释、rule、CLAUDE.md 里指向文档的那一行：**重点 + 什么时候读 + 仓库根起的路径**，括号里可以写文档里有什么。
+
+```text
+<重点>。<什么时候>读 <仓库根起的路径>（<文档里有什么>）
+```
+
+- 重点：坑、约束类的必须写；纯历史、纯数据可以省掉
+- 什么时候：写成动作，"改 X 前""要调 Y 时""评估 Z 前"
+- 不写 `原因见 X`、`详见 X`、`见文档`
+
+## 代码注释
+
+只和一个文件（或其中一段代码）有关的，写在相关代码上方，1–3 行。两三行能说完的直接写，不拆文档。`apps/web/src/api/client.ts`：
+
+```ts
+// 必须在 setupInterceptors() 之后调用：拦截器里会补上鉴权头，顺序反了首个请求 401
+export function createClient() {
+```
+
+有扩展内容时，注释留重点和指针，扩展内容进文档。改造前，`apps/web/src/api/retry.ts`：
+
+```ts
+// 重试次数固定为 3。以前是 5 次，但上游网关连续 5 次失败
+// 会把客户端 IP 拉黑 10 分钟，线上出过一次事故。
+// 首次 + 3 次重试 = 4 次，留一次余量。
+// 试过在网关前加熔断，和网关限流叠加后导致长时间不可用，放弃了。
+// 退避从 200ms 起指数增长。
+const MAX_RETRY = 3;
+```
+
+改造后：
+
+```ts
+// 重试上限 3：网关连续 5 次失败会封 IP 10 分钟。改重试次数或退避前读 apps/web/.context/api/retry-policy.md（事故经过、试过的熔断方案）
+const MAX_RETRY = 3;
+```
+
+"退避从 200ms 起指数增长"读代码就能看出来，删掉。涉及整个文件的写在文件头注释里。
+
 ## rule
 
-**frontmatter 的 `---` 必须是文件第一行**，前面不能有任何内容（包括注释和空行）。正文"做什么"在前，原因、经过、数字跟在后面，不超过 20 行（不算 frontmatter 和空行）。
+只给**几个文件共用**的内容，或没法写注释的文件（JSON、lockfile、生成物、二进制资源）用。只和一个能写注释的文件有关的，写成注释。
+
+**frontmatter 的 `---` 必须是文件第一行**，前面不能有任何内容（包括注释和空行）。正文"做什么"在前，一两句原因跟在后面，不超过 10 行（不算 frontmatter 和空行）。
 
 包内 rule，glob 相对该包写。文件 `apps/web/.claude/rules/styling/tokens.md`：
 
@@ -17,22 +60,7 @@ paths:
 改这里的 token 后必须跑 `pnpm tokens:build`，否则 `src/styles/generated/` 不会更新，但页面不报错。
 ```
 
-原因、经过几行能说完的，直接写在 rule 里。文件 `apps/web/.claude/rules/api/retry.md`：
-
-```markdown
----
-paths:
-  - "src/api/retry.ts"
----
-
-重试次数不能超过 3（首次加重试共 4 次请求），退避从 200ms 起指数增长。
-
-原因：上游网关连续 5 次失败会把客户端 IP 拉黑 10 分钟，线上出过一次事故。上限 3 留出了一次余量。
-
-试过在网关前加熔断，和网关自身的限流叠加后导致长时间不可用，已放弃。
-```
-
-背景放不下时（超过 20 行、实测数字的历史表格、几条 rule 共用），rule 留"做什么"和一行文档路径。根作用域的 rule（单仓库的所有 rule，或 monorepo 的跨包 rule），glob 从仓库根写完整路径。文件 `.claude/rules/db/schema-web-sync.md`：
+有扩展内容时，rule 留"做什么"和指针。根作用域的 rule（单仓库的所有 rule，或 monorepo 的跨包 rule），glob 从仓库根写完整路径。文件 `.claude/rules/db/schema-web-sync.md`：
 
 ```markdown
 ---
@@ -41,12 +69,12 @@ paths:
   - "apps/web/src/generated/db/*.ts"
 ---
 
-改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型。原因见 .context/db/generated-types.md
+改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型，生成物不能手改。要改生成逻辑或排查类型对不上时读 .context/db/generated-types.md（生成流程、试过的方案）
 ```
 
 ## 领域索引 rule
 
-给**能挂到代码上、但不属于某条具体 rule** 的文档用（外部系统调研、领域内几处共用的数据）。从某条 rule 拆出来、已被那条 rule 用一行路径指到的文档不用再登记进来。每个有这类文档的领域一个，文件名固定为 `context-index.md`，`paths` 覆盖这个领域的代码。文件 `apps/web/.claude/rules/api/context-index.md`：
+给**能挂到代码上、但不属于某一处**的文档用（外部系统调研、领域内几处共用的数据）。已被注释或 rule 里的指针指到的文档不用再登记进来。每个有这类文档的领域一个，文件名固定为 `context-index.md`，`paths` 覆盖这个领域的代码。文件 `apps/web/.claude/rules/api/context-index.md`：
 
 ```markdown
 ---
@@ -125,7 +153,7 @@ api 相关的项目文档，改动前按需读：
 值得重新评估的条件：账户升级为企业商户，或换了支付渠道。
 ```
 
-文档只写背景。能挂到代码上的"做什么"写成 rule，rule 里留一行文档路径。
+文档只写背景。能挂到代码上的"做什么"写在原处（注释或 rule），原处留指针。
 
 ## skill
 
@@ -151,7 +179,7 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 ## 更多上下文
 - 各包和各模块的专属约定、背景会按路径通过 rule 自动加载，不用手动查
 - 做新需求、评估方案前，先看 `.context/README.md` 和 `apps/web/.context/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
-- 记下读代码看不出来的项目知识（原因、踩坑、实测数字、外部约束）：写进 `.claude/rules/`，放不下或挂不到代码上的写进 `.context/`（装了 context-keeper 插件就用 `record-context`），不写成长注释，也不只记在自动记忆里
+- 记下读代码看不出来的项目知识（原因、踩坑、实测数字、外部约束）：只涉及一个文件的写成紧贴代码的短注释，几个文件共用的写进 `.claude/rules/`；经过、数字等扩展内容和挂不到代码上的写进 `.context/`，原处留「重点 + 什么时候读 + 路径」（装了 context-keeper 插件就用 `record-context`）。不写成长注释，也不只记在自动记忆里
 - 发布流程：用 `/release`
 ```
 

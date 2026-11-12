@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
+import { pointersIn, resolvePointer as resolveWith, TRIGGER_RE } from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.includes('-h') || argv.includes('--help')) {
@@ -120,7 +121,7 @@ const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 const ROOT_CLAUDE_MD = new Set(['CLAUDE.md', '.claude/CLAUDE.md']);
 const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 const INDEX_RULE_RE = /(^|\/)\.claude\/rules\/[^/]+\/context-index\.md$/;
-const RULE_MAX_LINES = 20;
+const RULE_MAX_LINES = 10;
 
 const rules = FILES.filter((f) => RULE_RE.test(f));
 const entries = FILES.filter((f) => ENTRY_RE.test(f));
@@ -320,9 +321,10 @@ for (const rule of rules) {
   }
   const bodyLines = fm.body.filter((l) => l.trim()).length;
   if (bodyLines > RULE_MAX_LINES && !INDEX_RULE_RE.test(rule)) {
-    add('warn', 'rule', rule, `正文 ${bodyLines} 行（上限 ${RULE_MAX_LINES}）：命中时整份加载。收窄 paths 拆成几条，或把长背景拆进 .context/ 文档、rule 留一行路径`);
+    add('warn', 'rule', rule, `正文 ${bodyLines} 行（上限 ${RULE_MAX_LINES}）：命中时整份加载。rule 只留做什么和一两句原因，经过、数字等扩展内容拆进 .context/ 文档，rule 里留「重点 + 什么时候读 + 路径」`);
   }
   const sf = scopeFiles(scope);
+  const hitFiles = new Set(); // 所有 glob 一共匹配到的文件，用来认出单文件 rule
   for (const { orig, glob } of positive) {
     const label = orig === glob ? `"${glob}"` : `"${orig}"（展开后的 "${glob}"）`;
     let test;
@@ -333,6 +335,7 @@ for (const rule of rules) {
       continue;
     }
     const matched = sf.filter(test);
+    for (const m of matched) hitFiles.add(m);
     if (!matched.length) {
       if (glob.startsWith('./')) {
         add('error', 'rule', rule, `paths ${label} 以 ./ 开头：Claude Code 按 gitignore 语义匹配，这样写匹配不到文件，去掉 ./`);
@@ -350,6 +353,11 @@ for (const rule of rules) {
     } else if (sf.length >= 20 && matched.length / sf.length >= 0.5) {
       add('warn', 'rule', rule, `paths ${label} 过宽：匹配了作用域里 ${matched.length}/${sf.length} 个文件，起不到过滤作用`);
     }
+  }
+  // 只匹配一个文件、且它能写注释：碰到文件就整条加载，和写在文件里的注释成本一样，还离代码更远
+  if (hitFiles.size === 1 && !INDEX_RULE_RE.test(rule)) {
+    const [only] = hitFiles;
+    if (langFor(only)) add('warn', 'rule', rule, `只匹配一个文件 ${scope}${only}：改写成那个文件里紧贴相关代码的注释，扩展内容进 .context/ 文档、注释里留指针，再删掉这条 rule`);
   }
 }
 const ignoredProbes = ignored(unmatched.flatMap((u) => u.probes));
@@ -462,13 +470,12 @@ for (const { dir, probe, category, msg } of PROBES) {
 
 // ---------- 指针：失效与孤儿 ----------
 
-// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见.context/…"这种紧贴中文的写法也能认出来
-const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*\.context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
 const referenced = new Set(); // 被文档以外的文件指到
 const fromRule = new Set(); // 被 rule（含领域索引 rule）指到：碰到 rule 的 paths 时路径随 rule 进 context，等于已登记
 const RULE_SET = new Set(rules);
 const inEntry = new Set(); // 登记在文档入口里
 const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
+const fromCode = new Set(); // 被源码注释指到：读到那段代码时指针就在眼前，等于已登记
 // 指针只认 Claude 会读到的地方：CLAUDE.md、rule、skill、文档、文档入口，以及源码。
 // 其他 Markdown（README、CHANGELOG、对外文档）里的 `.context/…` 多半是示例或历史记录，不算指针
 const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
@@ -482,14 +489,7 @@ function filesMentioningContext() {
   return FILES.filter(isPointerSource);
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
-// 中文正文紧贴路径时（"见包/.context/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
-// 第一段至少留一个字符，免得退化成根作用域的 `.context/`。都不存在时返回 null
-function resolvePointer(p) {
-  for (let q = p; ; q = q.replace(/^[^\x00-\x7f]/u, '')) {
-    if (pointerExists(q)) return q;
-    if (!/^[^\x00-\x7f][^/]/u.test(q)) return null;
-  }
-}
+const resolvePointer = (p) => resolveWith(p, pointerExists);
 for (const f of filesMentioningContext()) {
   const isMd = MD_SOURCES.has(f);
   const text = isMd ? read(f) : readRaw(f);
@@ -498,28 +498,33 @@ for (const f of filesMentioningContext()) {
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
   const isRule = RULE_SET.has(f);
+  const isCode = !isMd;
   // Markdown 代码块里的是示例，不算指针
-  for (const [line, i] of proseLines(text, !isMd)) {
-    if (!line.includes('.context/')) continue;
-    const seen = new Set();
-    for (const m of line.matchAll(POINTER_RE)) {
-      const raw = m[1].replace(/^\.\//, '');
-      if (seen.has(raw)) continue;
-      seen.add(raw);
+  const prose = proseLines(text, !isMd);
+  prose.forEach(([line, i], k) => {
+    const found = pointersIn(line);
+    if (!found.length) return;
+    // 指针折行时"什么时候读"可能写在上一行
+    const near = `${k > 0 ? prose[k - 1][0] : ''}\n${line}`;
+    if (!fromDoc && !TRIGGER_RE.test(near.replace(/\.context\/\S*/g, ''))) {
+      add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
+    }
+    for (const raw of found) {
       const p = resolvePointer(raw);
       if (p) {
         if (!fromDoc) referenced.add(p);
         if (isEntry) inEntry.add(p);
         if (isRootClaude) fromRootClaude.add(p);
         if (isRule) fromRule.add(p);
+        if (isCode) fromCode.add(p);
       } else {
         add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
     }
-  }
+  });
 }
 for (const d of docs) {
-  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回 rule，不能就在相关 rule 里留一行路径、或登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
+  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回原处，不能就在相关代码的注释或 rule 里留指针、或登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
 }
 for (const e of entries) {
   if (!fromRootClaude.has(e)) add('warn', 'entry', e, '文档入口没被根 CLAUDE.md 指到：挂不到代码上的文档在做新需求时不会被看到；在根 CLAUDE.md「更多上下文」里写上这个路径');
@@ -531,9 +536,9 @@ for (const [key, list] of domainsWithDocs) {
   const [scope, domain] = key.split('|');
   const idx = `${scope}.claude/rules/${domain}/context-index.md`;
   if (FILE_SET.has(idx)) continue;
-  // 已被某条 rule 指到的文档，碰到那条 rule 的 paths 时就会被带出来，不要求另建索引 rule
-  const unindexed = list.filter((d) => !inEntry.has(d) && !fromRule.has(d));
-  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}、没被任何 rule 指到，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
+  // 已被 rule 或代码注释指到的文档，碰到那条 rule 的 paths、读到那段代码时就会被带出来，不要求另建索引 rule
+  const unindexed = list.filter((d) => !inEntry.has(d) && !fromRule.has(d) && !fromCode.has(d));
+  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}、没被任何 rule 或代码注释指到，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
 }
 
 // ---------- 放错地方的文档 ----------

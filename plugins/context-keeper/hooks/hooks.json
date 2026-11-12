@@ -1,6 +1,18 @@
 {
-  "description": "写入长注释块时提醒把背景信息移进 rule 或 .context/（只提醒，不阻断；CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）",
+  "description": "写入长注释块时提醒只留一句重点、扩展内容进 .context/（CONTEXT_KEEPER_COMMENT_HOOK=0 关闭）；改到带 .context/ 指针的代码而本会话没读过那份文档时拦一次（CONTEXT_KEEPER_POINTER_HOOK=0 关闭）",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 && node \"${CLAUDE_PLUGIN_ROOT}/scripts/pointer-guard.mjs\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",

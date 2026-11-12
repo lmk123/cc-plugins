@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 背景信息该进 rule 或 .context/。
+// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 注释只留一句重点，扩展内容进 .context/、原处留指针。
 // 只提醒，不阻断。设环境变量 CONTEXT_KEEPER_COMMENT_HOOK=0 可关闭。
 //
 // 做法：对写入后的整个文件找注释块，块里至少一半的行是这次新写的才提醒。
@@ -100,8 +100,11 @@ if (!hits.length) process.exit(0);
 
 const msg = [
   `[context-keeper] 刚写入的 ${file} 里有长注释块：${hits.join('、')}。`,
-  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范用 record-context 把它移进 paths 指向这个文件的 rule（放不下的才进 .context/ 文档），',
-  '原处只在这段代码确有讲究（顺序不能换、数值不能随便改）时留一行带路径的指针。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
+  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范（用 record-context）拆开：',
+  '注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行；经过、试过的方案、数字等扩展内容移进 .context/<领域>/<slug>.md，',
+  // 示例路径拆开写，免得 check.mjs 把它当成失效指针
+  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数或退避前读 ${['apps/web', '.context', 'api/retry-policy.md'].join('/')}\`。`,
+  '同样的内容也适用于其他文件时，写成 rule 而不是注释。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
 ].join('');
 
 process.stdout.write(JSON.stringify({
