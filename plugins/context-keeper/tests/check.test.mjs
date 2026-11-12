@@ -94,6 +94,78 @@ test('带重点的登记行、以什么时候读开头的登记行、正文另�
   assert.deepEqual(r.findings, []);
 });
 
+// 以下几条共用：一个领域索引 rule，正文是 lines；返回报了"没有重点"的行号
+function bareLinesOf(lines, extra = {}) {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/context-index.md': `${fm}${lines.join('\n')}\n`,
+    ...extra,
+  }));
+  return r.findings.filter((f) => f.file.endsWith('context-index.md') && /没有重点/.test(f.msg)).map((f) => f.line - 5);
+}
+
+test('折行的登记行：重点在上一行、路径落在下一行开头的不报没有重点', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档。每行前半句是重点，细节按需读：',
+    '- 网关连续 5 次失败封 IP。改重试次数前读',
+    '  `.context/api/retry-policy.md`（事故经过）',
+  ]), []);
+  // 上一行只是引出列表的话或表头时，照样算路径打头
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档，改动前按需读。',
+    '`.context/api/retry-policy.md`：改重试次数前',
+    '',
+    '| 文档 | 什么时候读 |',
+    '| --- | --- |',
+    '| `.context/payment/installments.md` | 新增错误码前 |',
+  ]), [2, 6]);
+});
+
+test('路径打头的几种写法都报没有重点：./ 前缀、编号列表、链接标题、加粗标题、重点写在路径后面', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '1. `./.context/api/retry-policy.md`：改重试次数前',
+    '- [重试策略](.context/api/retry-policy.md)：改重试次数前',
+    '- **分期付款** `.context/payment/installments.md`：新增错误码前',
+    '- `.context/api/retry-policy.md`：网关连续 5 次失败封 IP。改重试次数前读',
+    '> - `.context/api/retry-policy.md`：改重试次数前',
+  ]), [2, 3, 4, 5, 6]);
+});
+
+test('路径前面有话的不报没有重点：加粗的重点、紧贴路径的中文', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '- **重试上限 3** `.context/api/retry-policy.md`：改重试次数前读',
+    '- 见包/.context/api/limits.md，评估限流方案前读',
+  ], { '包/.context/api/limits.md': '# 限流\n' }), []);
+});
+
+test('包里的领域索引 rule 也查登记行', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/web/src/api/a.ts': 'export const A = 1;\n',
+    'apps/web/src/api/b.ts': 'export const B = 1;\n',
+    'apps/web/.context/api/gateway.md': '# 网关\n',
+    'apps/web/.claude/rules/api/context-index.md': '---\npaths:\n  - "src/api/*.ts"\n---\n\n- `apps/web/.context/api/gateway.md`：改超时前\n',
+  }));
+  assert.ok(r.findings.some((f) => f.file === 'apps/web/.claude/rules/api/context-index.md' && /没有重点/.test(f.msg)));
+});
+
+test('正文只有指针的 rule：引出列表的话、折到下一行的后半句不算正文，带约束词的冒号行算', () => {
+  const fm = '---\npaths:\n  - "src/api/*.ts"\n---\n\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': 'export const B = 1;\n',
+    '.claude/rules/api/lead.md': `${fm}重试相关的项目文档，改动前按需读。\n- \`.context/api/retry-policy.md\`：改重试次数前（事故经过、\n  试过的熔断方案）\n`,
+    '.claude/rules/api/own.md': `${fm}重试上限不能超过 3，细节：\n- \`.context/api/retry-policy.md\`：改重试次数前读\n`,
+  }));
+  const hit = (name) => r.findings.some((f) => f.file.endsWith(name) && /没有重点/.test(f.msg));
+  assert.ok(hit('lead.md'));
+  assert.ok(!hit('own.md'));
+});
+
 test('孤儿文档、没被根 CLAUDE.md 指到的入口', () => {
   const r = check(makeRepo({ ...CLEAN, 'CLAUDE.md': '# 项目\n', '.context/api/unused.md': '# 没人指\n' }));
   assert.ok(r.findings.some((f) => f.category === 'orphan' && f.file === '.context/api/unused.md'));

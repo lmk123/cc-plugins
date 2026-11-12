@@ -509,19 +509,38 @@ function filesMentioningContext() {
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
-// 登记行有没有重点，只认得出最常见的一种没有：路径打头（"- `路径`：改 X 前"），前面没有任何话。
-// 重点写在路径前面（「重点。改 X 前读 路径」），所以路径前面只剩列表符号、反引号的就是没写。
+const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
+// 标题、表格里不带指针的行（表头、分隔行）和引出列表的话（"……："、"……按需读。"）：不是重点，也不是折行登记行的上半句。
+// 以冒号结尾、但带着"必须 / 不能 / 上限"这类词的是约束本身（"重试上限 3，细节："），不算
+const CONSTRAINT_RE = /必须|务必|不能|不可|不要|不许|禁止|只能|上限|下限|\b(?:must|never|always|do not|don't|cannot|can't)\b/i;
+function isLead(line) {
+  const t = line.trim();
+  return /^[#|]/.test(t) || /按需读/.test(t) || (/[：:]$/.test(t) && !CONSTRAINT_RE.test(t));
+}
+// 登记行的重点有没有写在路径前面（「重点。改 X 前读 路径」）。认得出的是路径打头的行：路径前面只剩列表符号、
+// 引号、表格竖线这类标记，或者只有文档标题（`[标题](路径)` 的链接文字、单独一段不带数字和标点的加粗）。
 // 路径前面紧贴着中文（resolvePointer 去掉了前缀才找到文件）说明前面有话，不算
 function pathFirst(line, raw) {
-  const head = line.slice(0, line.indexOf(raw)).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/[\s`*_"'“”‘’「」《》<(（[]/g, '').replace(/^\.\/$/, '');
+  const head = line.slice(0, line.indexOf(raw))
+    .replace(/\.\/$/, '') // pointersIn 去掉了路径开头的 ./
+    .replace(/^\s*(?:>\s*)+/, '')
+    .replace(LIST_ITEM_RE, '')
+    .replace(/^\[[ xX]\]\s+/, '')
+    .replace(/\[[^\]]*\]\($/, '')
+    .replace(/^(\*\*|__)[^*_\d，。；：,.;:]+\1[\s：:—–-]*(?=`?$)/, '')
+    .replace(/[\s`*_"'“”‘’「」《》<(（[|>]/g, '');
   return head === '' && resolvePointer(raw) === raw;
 }
-// rule 正文里除了指针行、"……："这种引出列表的行和标题，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报
+// rule 正文里除了指针行、标题和引出列表的话，还有没有别的话。有的话重点可能写在那里，路径打头的指针行不报。
+// 登记行折到下一行的后半句（缩进、不是新的列表项，紧跟在带指针的行后面）是那一行的一部分，不算
 function hasOwnContent(text) {
   const fm = parseFrontmatter(text);
+  let afterPointer = false;
   return (fm ? fm.body : text.split(/\r?\n/)).some((l) => {
-    const t = l.trim();
-    return t && !/^#/.test(t) && !/[：:]$/.test(t) && !pointersIn(l).length;
+    if (!l.trim()) { afterPointer = false; return false; }
+    if (pointersIn(l).length) { afterPointer = true; return false; }
+    afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
+    return !afterPointer && !isLead(l);
   });
 }
 for (const f of filesMentioningContext()) {
@@ -553,12 +572,15 @@ for (const f of filesMentioningContext()) {
     // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
-    const separate = isMd ? /^\s*(?:[-*+]|\d+[.)])\s/.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
-    const near = separate || pointersIn(prev).length ? own : `${prev}\n${own}`;
+    const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
+    const folded = !separate && !pointersIn(prev).length; // 这一行接着上一行写
+    const near = folded ? `${prev}\n${own}` : own;
+    // 折行的登记行，重点在上一行：上一行有话、又不是标题或引出列表的话时，路径打头不算没写重点
+    const headAbove = folded && prev.trim() !== '' && !isLead(prev);
     if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
-    } else if (bareLines && pathFirst(line, found[0])) {
-      add('info', 'pointer-style', f, '登记行只有路径和什么时候读，没有重点：Claude 要读完整份文档才拿得到重点，这一行进了 context 等于什么都没给。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」）；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
+    } else if (bareLines && !headAbove && pathFirst(line, found[0])) {
+      add('info', 'pointer-style', f, '登记行以路径开头，路径前面没有重点：只有路径和什么时候读的行进了 context 等于什么都没给，Claude 要读完整份文档才拿得到重点。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」），已经写在路径后面的挪到前面；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
     }
     for (const raw of found) {
       const p = resolvePointer(raw);
