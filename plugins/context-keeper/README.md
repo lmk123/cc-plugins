@@ -48,13 +48,13 @@ const MAX_RETRY = 3;
 
 - `record-context`：要记一条项目知识时，决定它写到哪里，按模板写入，并登记进对应入口。
 - 根 CLAUDE.md 的「更多上下文」索引里有一行常驻的写入约定，让 Claude 默认不把背景写成长注释或只记在自动记忆里。
-- comment hook（PostToolUse）：Claude 写入 5 行以上的独立注释块时，提醒它注释只留一句重点，扩展内容进 `.context/`、原处留指针。只提醒、不阻断，JSDoc、license、行尾注释不算。设环境变量 `CONTEXT_KEEPER_COMMENT_HOOK=0` 可关闭。
+- comment hook（PostToolUse）：Claude 写入 4 行以上的独立注释块时，提醒它注释只留一句重点，扩展内容进 `.context/`、原处留指针。只提醒、不阻断，JSDoc、license、行尾注释不算。设环境变量 `CONTEXT_KEEPER_COMMENT_HOOK=0` 可关闭。
 
 **读取端**
 
 - 代码注释：读到那段代码时就在眼前，扩展内容的指针也在这里。
 - rule：碰到匹配的文件时自动加载。
-- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段）；同一会话每处指针只拦一次，文档读过（Read、或 Bash 里 cat 过）之后指向它的指针都不再拦，上下文压缩后"读过"重新算。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
+- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段）；同一会话每处指针只拦一次（拦下后 3 秒内对同一处的编辑继续拦，免得同一条消息里的后几个 Edit 漏过去），文档读过（Read、或 Bash 里 cat 过）之后指向它的指针都不再拦，上下文压缩后"读过"重新算；主会话和每个子代理各算各的。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
 - 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是领域里多处都该知道、又不属于某一处的长文档清单。
 - 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
 
@@ -112,5 +112,12 @@ const MAX_RETRY = 3;
 - 检查脚本："没写什么时候读"不再把路径后面紧跟的中文一起删掉（误报），也不再把"以前""超时"当成触发条件（漏报）；被 CLAUDE.md 某一行指到的文档不再报缺领域索引
 - `organize-context`：CLAUDE.md 条目、单文件 rule 改写成注释要块 A、B 都批准才执行
 - 改动让指针里的重点或文档过时时，同一次改动里更新（拦截消息、写入约定和 `record-context` 都加了这一条）。已有项目的根 CLAUDE.md 写入约定那一行，下次跑 `organize-context` 时按新模板补
+
+0.5.2 修了几处评审发现的问题：
+
+- pointer-guard：主会话和子代理各算各的（原来主会话读过或被拦过，子代理就不拦了）；拦下后 3 秒内对同一处的编辑继续拦（原来同一条消息里的第二个 Edit 会直接放行）；不再按扩展名表筛文件，`.proto`、`.graphql` 这类文件里的注释指针也拦
+- 检查脚本：扩展名表补了 `.proto`、`.graphql`、`.prisma`、`.jsonc`、`.ini` 等能写注释的格式，表里没有的非 Markdown 文件里指到文档的路径也算已登记（原来报孤儿文档）；路径参数相对当前目录找不到时按仓库根解析；`--comments` 不再把已经带指针的短注释列成搬运候选；"前最好读""前一定要读""时也要读"这类写法不再报没写什么时候读
+- 长注释块的阈值从 5 行降到 4 行，和"注释 1–3 行"对齐，comment hook 和 `--comments` 都按 4 行算
+- `record-context`：被 comment hook 提醒而来、但背景不值得记的，直接把注释删掉或缩短；拆注释不占"最多三条"
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。

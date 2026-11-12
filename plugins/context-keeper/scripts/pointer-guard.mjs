@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 // PreToolUse hook：要改的代码附近有指向 .context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
 // 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每处指针只拦一次，文档读过之后不再拦。
+// 主会话和每个子代理各算各的：子代理的 context 是独立的，主会话读过、被拦过都不代表它知道。
 // 设环境变量 CONTEXT_KEEPER_POINTER_HOOK=0 可关闭。
 //
 // "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）和紧贴在它们上方的注释；
 // 文件头注释（后面是空行或 import 的那几段，紧贴声明的不算）。
-// 只认能写注释的源码文件；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
+// 只管非 Markdown 文件里的指针（Markdown 里的路径多半是示例）；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { langFor } from './lib/comments.mjs';
 import { pointersIn, resolvePointer } from './lib/pointers.mjs';
 
 if (process.env.CONTEXT_KEEPER_POINTER_HOOK === '0') process.exit(0);
@@ -27,7 +27,8 @@ const tool = input.tool_name;
 const ti = input.tool_input || {};
 if (!['Edit', 'MultiEdit', 'Write'].includes(tool) || !ti.file_path) process.exit(0);
 const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
-if (!langFor(file)) process.exit(0);
+// 不按扩展名表筛：表里没有的格式（.proto、.graphql……）照样能写注释指针。没有指针的文件下面自然放行
+if (/\.(md|mdx|markdown)$/i.test(file)) process.exit(0);
 
 // 项目根取离文件最近的 .git（worktree 里是 .git 文件）。找不到就不管：指针是仓库根起的路径，没有根就解析不了
 let root = null;
@@ -141,13 +142,25 @@ if (!hits.length) process.exit(0);
 // 先查拦过没有，再去读转录：拦过的指针不用为它把整份转录读一遍。
 // 按指针那一行的文本记，不按行号：文件上方增删行之后还认得出是同一处
 const rel = path.relative(root, file).split(path.sep).join('/');
-const sid = String(input.session_id || input.transcript_path || 'unknown').replace(/[^\w-]/g, '_').slice(0, 120);
-const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}.json`);
-let warned = [];
-try { warned = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-if (!Array.isArray(warned)) warned = [];
+const safe = (s) => String(s).replace(/[^\w-]/g, '_').slice(0, 120);
+const sid = safe(input.session_id || input.transcript_path || 'unknown');
+// 子代理里 session_id、transcript_path 都是主会话的，靠 agent_id 区分：状态各记各的
+const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null;
+const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}${agentId ? `.${safe(agentId)}` : ''}.json`);
+// { 指针的 key: 拦下它的时间戳 }。0.5.1 及以前存的是 key 数组，时间按 0 算
+let warned = {};
+try {
+  const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  if (Array.isArray(saved)) for (const x of saved) warned[x] = 0;
+  else if (saved && typeof saved === 'object') warned = saved;
+} catch {}
 const key = ({ doc, k }) => crypto.createHash('sha1').update([root, rel, doc, lines[k].trim()].join('\n')).digest('hex').slice(0, 16);
-let todo = hits.filter((x) => !warned.includes(key(x)));
+// 同一条消息里对同一处的几个 Edit 是挨个触发 hook 的：第一个被拦时 Claude 还没看到拦截消息，后面几个不能直接放行。
+// 所以拦下之后的一小段时间内继续拦；Claude 看到消息后再提交，早就过了这段时间
+const REPEAT_MS = 3000;
+const now = Date.now();
+const settled = (x) => typeof warned[key(x)] === 'number' && now - warned[key(x)] > REPEAT_MS;
+let todo = hits.filter((x) => !settled(x));
 if (!todo.length) process.exit(0);
 
 // ---------- 本会话读过哪些 ----------
@@ -157,8 +170,25 @@ if (!todo.length) process.exit(0);
 const tailOf = (p) => p.slice(p.lastIndexOf('.context/'));
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
+// 子代理的转录在 <主转录去掉 .jsonl>/subagents/ 下（可能再隔一层子目录），文件名 agent-<agent_id>.jsonl。
+// 找不到就当没读过：最多多拦一次
+function agentTranscript(main, id) {
+  const want = `agent-${id}.jsonl`;
+  const walk = (dir, depth) => {
+    let list;
+    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const e of list) if (e.isFile() && e.name === want) return path.join(dir, e.name);
+    if (depth > 0) for (const e of list) {
+      const found = e.isDirectory() ? walk(path.join(dir, e.name), depth - 1) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(path.join(main.replace(/\.jsonl$/, ''), 'subagents'), 2);
+}
 try {
-  const transcript = input.transcript_path ? fs.readFileSync(input.transcript_path, 'utf8') : '';
+  const transcriptPath = input.transcript_path && agentId ? agentTranscript(input.transcript_path, agentId) : input.transcript_path;
+  const transcript = transcriptPath ? fs.readFileSync(transcriptPath, 'utf8') : '';
   const tails = [...unread].map(tailOf);
   for (const l of transcript.split('\n')) {
     if (l.includes('"compact_boundary"')) {
@@ -184,8 +214,10 @@ try {
 todo = todo.filter((x) => !seen.has(x.doc));
 if (!todo.length) process.exit(0);
 try {
+  // 已经记过时间的不刷新：窗口从第一次拦下算起，重试不会被一直顺延
+  for (const x of todo) if (typeof warned[key(x)] !== 'number') warned[key(x)] = now;
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  fs.writeFileSync(stateFile, JSON.stringify([...new Set([...warned, ...todo.map(key)])]));
+  fs.writeFileSync(stateFile, JSON.stringify(warned));
 } catch {
   process.exit(0); // 记不住拦过哪些就不拦，免得反复拦
 }
@@ -212,7 +244,7 @@ const shown = spans.slice(0, 20).map(([a, b]) => {
   return `- ${rel}:${a + 1}-${b + 1}\n${body.join('\n')}`;
 });
 const msg = [
-  '[context-keeper] 这次要改的代码附近有指向项目文档的指针，本会话还没读过：',
+  `[context-keeper] 这次要改的代码附近有指向项目文档的指针，${agentId ? '这个子代理' : '本会话'}还没读过：`,
   ...shown,
   '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
   '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新。',

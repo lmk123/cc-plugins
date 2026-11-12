@@ -183,8 +183,8 @@
 
 插件带两个 hook，都可以用环境变量关掉：
 
-- **comment-hook**（PostToolUse，`CONTEXT_KEEPER_COMMENT_HOOK=0` 关闭）：Claude 新写了 5 行以上的独立注释块时提醒它：注释只留必须知道的那一句，扩展内容进文档、原处留指针。只提醒，不阻断。
-- **pointer-guard**（PreToolUse，`CONTEXT_KEEPER_POINTER_HOOK=0` 关闭）：Claude 要改的代码附近有指向 `.context/` 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，把指针原文给它看，让它按触发条件决定先读文档还是直接重试，并提醒它改完后同步过时的重点和文档。同一会话里每处指针只拦一次（同一份文档被几处指到的，各拦各的），文档读过之后指向它的指针都不再拦。"附近"指：改动范围内、外层函数 / 类的声明行和紧贴在它们上方的注释，以及文件头注释。文件头注释指文件开头、后面是空行或 import 的那几段；紧贴着第一个声明的注释算那个声明的，所以涉及整个文件的指针写在文件头时，和下面的代码之间空一行。只认代码注释里的指针，rule 和 CLAUDE.md 里的不管。
+- **comment-hook**（PostToolUse，`CONTEXT_KEEPER_COMMENT_HOOK=0` 关闭）：Claude 新写了 4 行以上（超过注释的 3 行上限）的独立注释块时提醒它：注释只留必须知道的那一句，扩展内容进文档、原处留指针。只提醒，不阻断。
+- **pointer-guard**（PreToolUse，`CONTEXT_KEEPER_POINTER_HOOK=0` 关闭）：Claude 要改的代码附近有指向 `.context/` 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，把指针原文给它看，让它按触发条件决定先读文档还是直接重试，并提醒它改完后同步过时的重点和文档。同一会话里每处指针只拦一次（同一份文档被几处指到的，各拦各的），文档读过之后指向它的指针都不再拦。拦下后的 3 秒内，对同一处的编辑继续拦：同一条消息里的几个 Edit 是挨个执行的，后面几个提交时 Claude 还没看到拦截消息。主会话和每个子代理各算各的，主会话读过、被拦过，子代理第一次改到时照样拦。"附近"指：改动范围内、外层函数 / 类的声明行和紧贴在它们上方的注释，以及文件头注释。文件头注释指文件开头、后面是空行或 import 的那几段；紧贴着第一个声明的注释算那个声明的，所以涉及整个文件的指针写在文件头时，和下面的代码之间空一行。只认非 Markdown 文件里的指针，rule 和 CLAUDE.md 里的不管。
 
 ## 检查脚本
 
@@ -194,6 +194,6 @@
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" [路径] [--comments]
 ```
 
-检查：rule 的 frontmatter 位置、缺 `paths`、glob 匹配不到文件 / 基准错位 / 过宽、正文超过 10 行、只匹配一个能写注释的文件；skill 缺 description；CLAUDE.md 和 rule 里的 `@` import；CLAUDE.md 疑似带原因的行；文档文件名（日期/编号前缀、非 slug）、嵌套领域目录、缺领域索引 rule（已被 rule、CLAUDE.md 或代码注释指到的文档不算）；`.context/README.md` 没被根 CLAUDE.md 指到；失效指针（只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，代码块里的示例不算）；没写"什么时候读"的指针；孤儿文档（没登记在任何入口、rule、CLAUDE.md 或代码里）；`.context/`、`.claude/rules/`、`.claude/skills/` 被 `.gitignore` 忽略；放在 `.claude/` 下或按类型分目录的文档。`.context/` 是否已被别的用途占用查不出来，要人工看。`--comments` 额外列出长注释块和带信号词的注释作为搬运候选。带路径时只报告该路径下文件的问题。
+检查：rule 的 frontmatter 位置、缺 `paths`、glob 匹配不到文件 / 基准错位 / 过宽、正文超过 10 行、只匹配一个能写注释的文件；skill 缺 description；CLAUDE.md 和 rule 里的 `@` import；CLAUDE.md 疑似带原因的行；文档文件名（日期/编号前缀、非 slug）、嵌套领域目录、缺领域索引 rule（已被 rule、CLAUDE.md 或代码注释指到的文档不算）；`.context/README.md` 没被根 CLAUDE.md 指到；失效指针（只查 CLAUDE.md、rule、skill、`.context/` 文档和源码，代码块里的示例不算；脚本不认得的非 Markdown 文件里指得到文档的路径算已登记，指不到的不报）；没写"什么时候读"的指针；孤儿文档（没登记在任何入口、rule、CLAUDE.md 或代码里）；`.context/`、`.claude/rules/`、`.claude/skills/` 被 `.gitignore` 忽略；放在 `.claude/` 下或按类型分目录的文档。`.context/` 是否已被别的用途占用查不出来，要人工看。`--comments` 额外列出长注释块（4 行以上）和带信号词的注释作为搬运候选，3 行以内、已经带着有效指针的注释不列。带路径时只报告该路径下文件的问题；路径相对当前目录找不到时，按仓库根起的路径再找一次。
 
 脚本的判断是机械的：「警告」「提示」要结合上下文看（比如 glob 指向的生成物、确实该常驻的 rule），「错误」基本都要处理。有错误时退出码为 1。`node` 不可用时按本规范手工检查。脚本没有依赖，用户想接进 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。

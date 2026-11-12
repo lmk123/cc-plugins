@@ -15,6 +15,8 @@ const DART = { ...SLASH, strings: ['"""', "'''"] };
 const PY = { ...HASH, strings: ['"""', "'''"] };
 // Go 和 Ruby 没有专门的文档注释语法，紧贴在声明前的行注释就是文档
 const GO = { ...SLASH, strings: ['`'], docBefore: /^(package|func|type|var|const)\b/ };
+const SEMI = { line: [';'], block: false, html: false };
+const HASH_SEMI = { line: ['#', ';'], block: false, html: false };
 const RUBY = { ...HASH, docBefore: /^(def|class|module|attr_(reader|writer|accessor))\b|^[A-Z]\w*\s*=[^=]/ };
 
 const LANGS = {
@@ -26,13 +28,22 @@ const LANGS = {
   py: PY, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
   yaml: HASH, yml: HASH, toml: HASH, ex: HASH, exs: HASH, nim: HASH, cr: HASH, tf: HASH,
   sql: DASH, lua: DASH, hs: DASH,
+  // 不是编程语言、但能写注释的常见格式：指针写在这些文件的注释里也要认
+  proto: SLASH, prisma: SLASH, sol: SLASH, jsonc: SLASH, json5: SLASH,
+  graphql: { ...HASH, strings: ['"""'] }, gql: { ...HASH, strings: ['"""'] },
+  hcl: { line: ['#', '//'], block: true, html: false },
+  ini: HASH_SEMI, cfg: HASH_SEMI, conf: HASH_SEMI, properties: HASH,
+  cmake: HASH, mk: HASH, ps1: HASH, jl: HASH, nix: HASH,
+  clj: SEMI, cljs: SEMI, cljc: SEMI, el: SEMI, lisp: SEMI, scm: SEMI,
+  erl: { line: ['%'], block: false, html: false },
   vue: MARKUP, svelte: MARKUP, astro: MARKUP,
   html: { line: [], block: false, html: true }, htm: { line: [], block: false, html: true },
   xml: { line: [], block: false, html: true },
 };
-const BASENAMES = { Dockerfile: HASH, Makefile: HASH, Rakefile: RUBY, Gemfile: RUBY };
+const BASENAMES = { Dockerfile: HASH, Makefile: HASH, Rakefile: RUBY, Gemfile: RUBY, 'CMakeLists.txt': HASH, Jenkinsfile: SLASH, Justfile: HASH, justfile: HASH };
 
-export const MIN_BLOCK_LINES = 5;
+// 规范里注释最多 3 行，超过就该拆
+export const MIN_BLOCK_LINES = 4;
 
 export const SIGNAL_RE = /(为什么|以前|曾经|原本|历史|改成|不要改|注意|坑|性能|快了|基准|价格|旧版|\bwhy\b|\bnote\b|\bhack\b|\bbecause\b|\bpreviously\b|used to|\blegacy\b|\bworkaround\b|\bbenchmark|\bfaster\b|\bslower\b|do not change|don't change|[0-9]+ ?(毫秒|秒|分钟|小时|天|ms|s|secs?|seconds?|min|mins|minutes?|h|hrs?|hours?|days?)(?![A-Za-z]))/i;
 

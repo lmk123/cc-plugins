@@ -3,7 +3,7 @@
 // 无第三方依赖。复制进项目接 CI 时连同 lib/ 目录一起复制（import 了 lib/comments.mjs）。
 //
 // 用法：node check.mjs [路径] [--comments] [--json]
-//   路径        只报告该路径下文件的问题（默认整个仓库）
+//   路径        只报告该路径下文件的问题（默认整个仓库）。相对当前目录找不到时，按仓库根起的路径再找一次
 //   --comments  额外扫描源码里的长注释块和带信号词的注释，作为搬运候选
 //   --json      输出 JSON
 // 有「错误」级问题时退出码为 1。
@@ -59,7 +59,10 @@ const FILE_SET = new Set(FILES);
 
 let FILTER = '';
 if (target) {
-  FILTER = path.relative(ROOT, path.resolve(process.cwd(), target)).split(path.sep).join('/');
+  let abs = path.resolve(process.cwd(), target);
+  // 规范里的路径都从仓库根写起：在子目录里跑（比如在包目录里启动的会话）、按当前目录找不到时，再按仓库根解析一次
+  if (!fs.existsSync(abs) && !path.isAbsolute(target) && fs.existsSync(path.join(ROOT, target))) abs = path.join(ROOT, target);
+  FILTER = path.relative(ROOT, abs).split(path.sep).join('/');
   if (FILTER.startsWith('..')) { console.error(`路径不在仓库内：${target}`); process.exit(2); }
   if (!fs.existsSync(path.join(ROOT, FILTER))) { console.error(`路径不存在：${target}`); process.exit(2); }
   if (FILTER && !FILTER.endsWith('/') && fs.statSync(path.join(ROOT, FILTER)).isDirectory()) FILTER += '/';
@@ -478,9 +481,13 @@ const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
 const fromCode = new Set(); // 被源码注释指到：读到那段代码时指针就在眼前，等于已登记
 const fromClaudeMd = new Set(); // 被 CLAUDE.md 里某一行指到（不含个人的 CLAUDE.local.md）：那一行加载时指针就在眼前，等于已登记
 // 指针只认 Claude 会读到的地方：CLAUDE.md、rule、skill、文档、文档入口，以及源码。
-// 其他 Markdown（README、CHANGELOG、对外文档）里的 `.context/…` 多半是示例或历史记录，不算指针
+// 其他 Markdown（README、CHANGELOG、对外文档）里的 `.context/…` 多半是示例或历史记录，不算指针。
+// 扩展名表里没有的非 Markdown 文件（表不可能列全所有能写注释的格式）只认里面指得到文档的路径，算作已登记；
+// 指不到的不报失效、也不查写法：这类文件里的路径可能只是数据
 const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
-const isPointerSource = (f) => MD_SOURCES.has(f) || langFor(f) !== null;
+const isPointerSource = (f) => MD_SOURCES.has(f) || !/\.(md|mdx|markdown)$/i.test(f);
+// 一行是不是独立成行的注释（粗略，按常见注释前缀认）
+const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/;
 // 只读含 `.context/` 的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
 function filesMentioningContext() {
   if (IS_GIT) {
@@ -500,6 +507,7 @@ for (const f of filesMentioningContext()) {
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
   const isRule = RULE_SET.has(f);
   const isCode = !isMd;
+  const strict = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const isClaudeMd = CLAUDE_MD_RE.test(f) && !/\.local\.md$/.test(f);
   // Markdown 代码块里的是示例，不算指针
   const prose = proseLines(text, !isMd);
@@ -512,9 +520,9 @@ for (const f of filesMentioningContext()) {
     // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
-    const separate = isMd ? /^\s*(?:[-*+]|\d+[.)])\s/.test(line) : !/^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/.test(prev);
+    const separate = isMd ? /^\s*(?:[-*+]|\d+[.)])\s/.test(line) : !COMMENT_LINE_RE.test(prev);
     const near = separate || pointersIn(prev).length ? own : `${prev}\n${own}`;
-    if (!fromDoc && !TRIGGER_RE.test(near)) {
+    if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
     }
     for (const raw of found) {
@@ -526,7 +534,7 @@ for (const f of filesMentioningContext()) {
         if (isRule) fromRule.add(p);
         if (isCode) fromCode.add(p);
         if (isClaudeMd) fromClaudeMd.add(p);
-      } else {
+      } else if (strict) {
         add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
     }
@@ -570,10 +578,21 @@ if (WANT_COMMENTS) {
     if (f.split('/').some((s) => SKIP_DIRS.has(s))) continue;
     const text = readRaw(f);
     if (!text) continue;
-    const { blocks, signals: sig } = analyzeComments(text, f);
+    const { blocks, signals } = analyzeComments(text, f);
     for (const b of blocks) {
       add('info', 'comment-block', f, `${b.lines} 行的注释块（第 ${b.start}–${b.end} 行）`, b.start);
     }
+    // 已经是「重点 + 指针」的短注释（3 行以内、指得到文档）不用再搬：重点里常带数字和"坑""注意"，每次都会命中信号词
+    const fileLines = text.split(/\r?\n/);
+    const isPointerComment = (n) => {
+      let a = n - 1;
+      let b = n - 1;
+      while (a > 0 && COMMENT_LINE_RE.test(fileLines[a - 1])) a--;
+      while (b + 1 < fileLines.length && COMMENT_LINE_RE.test(fileLines[b + 1])) b++;
+      if (b - a + 1 > 3) return false;
+      return fileLines.slice(a, b + 1).some((l) => pointersIn(l).some((raw) => resolvePointer(raw)));
+    };
+    const sig = signals.filter((s) => !isPointerComment(s.line));
     if (sig.length) {
       const lines = sig.map((s) => s.line);
       add('info', 'comment-signal', f, `带信号词的注释 ${sig.length} 处：第 ${lines.slice(0, 15).join('、')}${lines.length > 15 ? ' …' : ''} 行`, lines[0]);
