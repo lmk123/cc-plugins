@@ -64,7 +64,7 @@ const MAX_RETRY = 3;
 
 **整理与体检**
 
-- `organize-context`：把现有项目迁移到这套结构，已经在用的项目则做体检。先出计划，批准后才动文件。也能把自动记忆里与环境无关的内容沉淀进项目。
+- `organize-context`：把现有项目迁移到这套结构，已经在用的项目则做体检。始终在 plan mode 里出计划（不在会先进入），批准后才动文件。也能把自动记忆里与环境无关的内容沉淀进项目。
 - `scripts/check.mjs`：确定性检查，skill 会自动调用，也可以手动跑：
 
   ```bash
@@ -136,5 +136,7 @@ const MAX_RETRY = 3;
 - pointer-guard：不是 git 仓库的项目，拿启动会话的目录当项目根（原来整个不生效）
 - 检查脚本：源码里只查注释里的指针，字符串里的路径（输出文件名、测试数据）不再报失效、不再报没写什么时候读，指得到文档的照样算已登记
 - 检查脚本：只匹配一个生成物或 lockfile 的 rule 不再报单文件 rule（`generated/` 目录、`.generated.` / `.pb.` 这类文件名、`pnpm-lock.yaml`，或文件头几行写着 generated / do not edit）；`record-context` 写明这类 rule 保留
+
+0.6.0：`organize-context` 始终在 plan mode 里运行。不在 plan mode 时先调用 EnterPlanMode 进入，计划用 ExitPlanMode 提交；进不去（工具不可用或用户拒绝）就停下来让用户切到 plan mode 后重跑，不再把计划写进回复里等同意。
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。
