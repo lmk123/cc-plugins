@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // PreToolUse hook：要改的代码附近有指向 .context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
-// 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每份文档只拦一次。
+// 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每处指针只拦一次，文档读过之后不再拦。
 // 设环境变量 CONTEXT_KEEPER_POINTER_HOOK=0 可关闭。
 //
-// "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）和紧贴在它们上方的注释；文件头注释。
+// "附近"：改动范围内的行；从改动处往上按缩进找到的外层声明行（函数、类……）和紧贴在它们上方的注释；
+// 文件头注释（后面是空行或 import 的那几段，紧贴声明的不算）。
 // 只认能写注释的源码文件；rule、CLAUDE.md 里的指针不管。出任何意外都放行。
 
 import fs from 'node:fs';
@@ -107,35 +108,54 @@ for (const [s, e] of ranges) {
     leading(j);
   }
 }
-// 文件头注释：整个文件的约定写在这里（跳过 shebang 和空行）
-for (let k = 0; k < lines.length; k++) {
-  if (blank(k) || (k === 0 && lines[k].startsWith('#!'))) continue;
-  if (!isComment(k)) break;
-  near.add(k);
+// 文件头注释：整个文件的约定写在这里（跳过 shebang 和空行）。一段注释后面是空行、import 之类或文件结尾才算文件头；
+// 紧贴着一个声明的那一段是那个声明的注释，不算：否则指针写在第一个常量上方的文件，改哪里都会被它拦
+const IMPORT_RE = /^(?:(?:import|from|package|use|using|require|include|namespace|module|mod|extern|source)\b|set\s+-|['"]use |@(?:import|use|charset|forward)\b|(?:const|let|var)\s.*=\s*require\()/;
+let run = [];
+let h = 0;
+for (; h < lines.length; h++) {
+  if (h === 0 && lines[h].startsWith('#!')) continue;
+  if (blank(h)) { for (const x of run) near.add(x); run = []; continue; }
+  if (!isComment(h)) break;
+  run.push(h);
 }
+if (h >= lines.length || IMPORT_RE.test(lines[h].trimStart())) for (const x of run) near.add(x);
 
 // ---------- 指针 ----------
 
 const exists = (p) => {
   try { return fs.statSync(path.join(root, p)).isFile(); } catch { return false; }
 };
-const pointers = new Map(); // 仓库根起的文档路径 -> [行下标]
+// 一处指针 = 一份文档 + 指到它的那一行。同一份文档可以被几处指到、各写各的触发条件，所以按处记，不按文档记
+const hits = []; // { doc: 仓库根起的文档路径, k: 行下标 }
 for (const k of [...near].sort((a, b) => a - b)) {
   for (const raw of pointersIn(lines[k])) {
-    const p = resolvePointer(raw, exists);
-    if (!p) continue; // 失效指针交给 check.mjs
-    if (!pointers.has(p)) pointers.set(p, []);
-    pointers.get(p).push(k);
+    const doc = resolvePointer(raw, exists);
+    if (doc) hits.push({ doc, k }); // 失效指针交给 check.mjs
   }
 }
-if (!pointers.size) process.exit(0);
+if (!hits.length) process.exit(0);
+
+// ---------- 每处指针只拦一次 ----------
+
+// 先查拦过没有，再去读转录：拦过的指针不用为它把整份转录读一遍。
+// 按指针那一行的文本记，不按行号：文件上方增删行之后还认得出是同一处
+const rel = path.relative(root, file).split(path.sep).join('/');
+const sid = String(input.session_id || input.transcript_path || 'unknown').replace(/[^\w-]/g, '_').slice(0, 120);
+const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}.json`);
+let warned = [];
+try { warned = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+if (!Array.isArray(warned)) warned = [];
+const key = ({ doc, k }) => crypto.createHash('sha1').update([root, rel, doc, lines[k].trim()].join('\n')).digest('hex').slice(0, 16);
+let todo = hits.filter((x) => !warned.includes(key(x)));
+if (!todo.length) process.exit(0);
 
 // ---------- 本会话读过哪些 ----------
 
 // 读过：Read / Edit / Write 过这个文件，或 Bash 命令里出现过它的 `.context/…` 部分（cd 进子目录后 cat 时没有仓库根起的前缀）。
-// 压缩之后原文已经不在 context 里，压缩点之前的不算
+// 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
 const tailOf = (p) => p.slice(p.lastIndexOf('.context/'));
-const unread = new Set(pointers.keys());
+const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 try {
   const transcript = input.transcript_path ? fs.readFileSync(input.transcript_path, 'utf8') : '';
@@ -161,31 +181,41 @@ try {
 } catch {
   process.exit(0);
 }
-for (const p of seen) unread.delete(p);
-if (!unread.size) process.exit(0);
-
-// ---------- 每份文档只拦一次 ----------
-
-const sid = String(input.session_id || input.transcript_path || 'unknown').replace(/[^\w-]/g, '_').slice(0, 120);
-const stateFile = path.join(os.tmpdir(), 'context-keeper', `${sid}.json`);
-let warned = [];
-try { warned = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-const key = (p) => crypto.createHash('sha1').update(path.join(root, p)).digest('hex').slice(0, 16);
-const todo = [...unread].filter((p) => !warned.includes(key(p)));
+todo = todo.filter((x) => !seen.has(x.doc));
 if (!todo.length) process.exit(0);
 try {
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  fs.writeFileSync(stateFile, JSON.stringify([...warned, ...todo.map(key)]));
+  fs.writeFileSync(stateFile, JSON.stringify([...new Set([...warned, ...todo.map(key)])]));
 } catch {
   process.exit(0); // 记不住拦过哪些就不拦，免得反复拦
 }
 
-const rel = path.relative(root, file).split(path.sep).join('/');
-const shown = todo.flatMap((p) => pointers.get(p).map((k) => `- ${rel}:${k + 1}  ${lines[k].trim().slice(0, 200)}`));
+// 指针折行时，重点和"什么时候读"可能在路径的上面几行、括号里的说明可能折到下一行：
+// 把指针所在的那段连续注释一起给出来（往上最多 3 行、往下 1 行），重叠的合并
+const clip = (i) => lines[i].trim().slice(0, 200);
+const spans = [];
+for (const { k } of todo) {
+  let a = k;
+  let b = k;
+  if (isComment(k)) {
+    while (a > 0 && k - a < 3 && isComment(a - 1) && !(a === 1 && lines[0].startsWith('#!'))) a--;
+    if (b + 1 < lines.length && isComment(b + 1)) b++;
+  }
+  const last = spans[spans.length - 1];
+  if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+  else spans.push([a, b]);
+}
+const shown = spans.slice(0, 20).map(([a, b]) => {
+  if (a === b) return `- ${rel}:${a + 1}  ${clip(a)}`;
+  const body = [];
+  for (let i = a; i <= b; i++) body.push(`    ${clip(i)}`);
+  return `- ${rel}:${a + 1}-${b + 1}\n${body.join('\n')}`;
+});
 const msg = [
   '[context-keeper] 这次要改的代码附近有指向项目文档的指针，本会话还没读过：',
-  ...[...new Set(shown)].slice(0, 20),
-  '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一份文档本会话不会再拦。',
+  ...shown,
+  '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
+  '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新。',
 ].join('\n');
 
 process.stdout.write(JSON.stringify({

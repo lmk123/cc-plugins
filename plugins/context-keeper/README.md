@@ -54,7 +54,7 @@ const MAX_RETRY = 3;
 
 - 代码注释：读到那段代码时就在眼前，扩展内容的指针也在这里。
 - rule：碰到匹配的文件时自动加载。
-- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释；同一会话每份文档只拦一次，读过（Read、或 Bash 里 cat 过）就不拦，上下文压缩后重新算。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
+- pointer-guard hook（PreToolUse）：改到带 `.context/` 指针的代码、而本会话还没读过那份文档时拦一次。"附近"指改动范围内、外层函数 / 类的声明和紧贴其上的注释，以及文件头注释（文件开头、后面是空行或 import 的那几段）；同一会话每处指针只拦一次，文档读过（Read、或 Bash 里 cat 过）之后指向它的指针都不再拦，上下文压缩后"读过"重新算。拦下时也会提醒：改完后指针里的重点或文档不再成立的，一并更新。设环境变量 `CONTEXT_KEEPER_POINTER_HOOK=0` 可关闭。
 - 领域索引 rule `.claude/rules/<领域>/context-index.md`：`paths` 覆盖这个领域的代码，正文是领域里多处都该知道、又不属于某一处的长文档清单。
 - 文档入口 `.context/README.md`：挂不到代码上的文档清单，根 CLAUDE.md 里常驻一行：
 
@@ -105,5 +105,12 @@ const MAX_RETRY = 3;
 - 检查脚本新增：单文件 rule、没写"什么时候读"的指针；被代码注释指到的文档不再要求登记进领域索引
 
 升级后跑一次 `organize-context`，它会列出要改写成注释的单文件 rule、要拆出扩展内容的长 rule，以及要改写的指针，批准后执行。
+
+0.5.1 修了几处评审发现的问题：
+
+- pointer-guard 改成每处指针拦一次（原来是每份文档一次，同一份文档的第二处指针不会拦）；紧贴第一个声明的首段注释不再当成文件头；折行的指针会把整段注释给出来
+- 检查脚本："没写什么时候读"不再把路径后面紧跟的中文一起删掉（误报），也不再把"以前""超时"当成触发条件（漏报）；被 CLAUDE.md 某一行指到的文档不再报缺领域索引
+- `organize-context`：CLAUDE.md 条目、单文件 rule 改写成注释要块 A、B 都批准才执行
+- 改动让指针里的重点或文档过时时，同一次改动里更新（拦截消息、写入约定和 `record-context` 都加了这一条）。已有项目的根 CLAUDE.md 写入约定那一行，下次跑 `organize-context` 时按新模板补
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。

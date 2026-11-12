@@ -24,5 +24,14 @@ export function resolvePointer(raw, exists) {
   }
 }
 
-// 指针有没有写"什么时候读"。没写的（"原因见 X""详见 X"）只能靠 Claude 猜要不要读
-export const TRIGGER_RE = /(前|时|之前|之后|如果|若|涉及|\bbefore\b|\bwhen\b|\bif\b)/i;
+// 指针有没有写"什么时候读"。没写的（"原因见 X""详见 X"）只能靠 Claude 猜要不要读。
+// 认的是收尾的"…前 / …时 / …之后"：后面要么断句，要么紧跟"读 / 看 / 先…"这类字；
+// "以前""目前""超时""同时"这类词里的前、时不算。传进来的文本要先去掉指针路径本身
+const AFTER = '(?=\\s*(?:$|[\\n，,、：:；;。（(）)]|先|再|必|要|请|务|应|需|得|去|读|看|查|参|翻))';
+export const TRIGGER_RE = new RegExp([
+  `(?<![以目从先此提当眼面])前${AFTER}`,
+  `(?<![超同当实临暂及随定小平有届按准历耗])时${AFTER}`,
+  `之后${AFTER}`,
+  '的时候|如果|若(?!干)|涉及|遇到|碰到|一旦',
+  '\\b(?:before|when|whenever|if|prior to)\\b',
+].join('|'), 'i');

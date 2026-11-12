@@ -476,6 +476,7 @@ const RULE_SET = new Set(rules);
 const inEntry = new Set(); // 登记在文档入口里
 const fromRootClaude = new Set(); // 被根 CLAUDE.md 指到
 const fromCode = new Set(); // 被源码注释指到：读到那段代码时指针就在眼前，等于已登记
+const fromClaudeMd = new Set(); // 被 CLAUDE.md 里某一行指到（不含个人的 CLAUDE.local.md）：那一行加载时指针就在眼前，等于已登记
 // 指针只认 Claude 会读到的地方：CLAUDE.md、rule、skill、文档、文档入口，以及源码。
 // 其他 Markdown（README、CHANGELOG、对外文档）里的 `.context/…` 多半是示例或历史记录，不算指针
 const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...docs]);
@@ -499,14 +500,21 @@ for (const f of filesMentioningContext()) {
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
   const isRule = RULE_SET.has(f);
   const isCode = !isMd;
+  const isClaudeMd = CLAUDE_MD_RE.test(f) && !/\.local\.md$/.test(f);
   // Markdown 代码块里的是示例，不算指针
   const prose = proseLines(text, !isMd);
   prose.forEach(([line, i], k) => {
     const found = pointersIn(line);
     if (!found.length) return;
-    // 指针折行时"什么时候读"可能写在上一行
-    const near = `${k > 0 ? prose[k - 1][0] : ''}\n${line}`;
-    if (!fromDoc && !TRIGGER_RE.test(near.replace(/\.context\/\S*/g, ''))) {
+    // 只删指针路径本身：中文正文和路径之间往往没有空格，按"删到下一个空白为止"会把后面的触发条件一起删掉
+    let own = line;
+    for (const raw of found) own = own.split(raw).join('');
+    // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
+    // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
+    const prev = k > 0 ? prose[k - 1][0] : '';
+    const separate = isMd ? /^\s*(?:[-*+]|\d+[.)])\s/.test(line) : !/^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/.test(prev);
+    const near = separate || pointersIn(prev).length ? own : `${prev}\n${own}`;
+    if (!fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
     }
     for (const raw of found) {
@@ -517,6 +525,7 @@ for (const f of filesMentioningContext()) {
         if (isRootClaude) fromRootClaude.add(p);
         if (isRule) fromRule.add(p);
         if (isCode) fromCode.add(p);
+        if (isClaudeMd) fromClaudeMd.add(p);
       } else {
         add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
       }
@@ -536,9 +545,9 @@ for (const [key, list] of domainsWithDocs) {
   const [scope, domain] = key.split('|');
   const idx = `${scope}.claude/rules/${domain}/context-index.md`;
   if (FILE_SET.has(idx)) continue;
-  // 已被 rule 或代码注释指到的文档，碰到那条 rule 的 paths、读到那段代码时就会被带出来，不要求另建索引 rule
-  const unindexed = list.filter((d) => !inEntry.has(d) && !fromRule.has(d) && !fromCode.has(d));
-  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}、没被任何 rule 或代码注释指到，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
+  // 已被 rule、代码注释或 CLAUDE.md 里某一行指到的文档，那条 rule、那段代码、那一行进 context 时就会被带出来，不要求另建索引 rule
+  const unindexed = list.filter((d) => !inEntry.has(d) && !fromRule.has(d) && !fromCode.has(d) && !fromClaudeMd.has(d));
+  if (unindexed.length) add('warn', 'index', unindexed[0], `领域 ${domain} 有 ${unindexed.length} 份文档没登记在 ${ENTRY}、没被任何 rule、CLAUDE.md 或代码注释指到，也没有索引 rule ${idx}：碰到相关代码时不会被带出来（挂不到代码上的应登记进 ${ENTRY}）`);
 }
 
 // ---------- 放错地方的文档 ----------
