@@ -89,7 +89,7 @@ test('清单变了、主会话压缩上下文之后重新给完整清单', () =>
   assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
 });
 
-// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没提到 _context 就不起 node。这段只有真跑一遍才测得到
+// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没有 `_context/`（Windows 上是 `_context\`）就不起 node。这段只有真跑一遍才测得到
 test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录的 payload 不出声', { skip: process.platform === 'win32' }, () => {
   const plugin = path.join(SCRIPTS, '..');
   const hooks = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;

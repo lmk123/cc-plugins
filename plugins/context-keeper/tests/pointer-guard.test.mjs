@@ -114,6 +114,16 @@ test('读过文档就不拦：Read 成功、Bash 里 cat 过', () => {
   assert.equal(guard(t, { ...edit, session: 'cat', transcript: [cat, result('t2')] }), null);
 });
 
+test('领域目录名以 _context 结尾时，读了别的同名文档不算读过这份', () => {
+  const doc = '_context/user_context/notes.md';
+  const t = makeRepo({ [doc]: '# 会话\n', '_context/notes.md': '# 别的\n', 'src/s.ts': `// 改会话前读 ${doc}\nconst S = 1;\n` });
+  const edit = { file: 'src/s.ts', old: 'const S = 1;' };
+  const other = use('t1', 'Bash', { command: 'cat _context/notes.md' });
+  assert.ok(guard(t, { ...edit, session: 'other', transcript: [other, result('t1')] }));
+  const own = use('t2', 'Bash', { command: `cat ${doc}` });
+  assert.equal(guard(t, { ...edit, session: 'own', transcript: [own, result('t2')] }), null);
+});
+
 test('不算读过：读失败、结果还没回来、Bash 里只是提到路径', () => {
   const t = repoWith({ 'src/retry.ts': RETRY_TS });
   const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };

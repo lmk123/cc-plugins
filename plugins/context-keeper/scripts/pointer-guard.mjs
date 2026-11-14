@@ -253,7 +253,8 @@ if (!todo.length) process.exit(0);
 // cd 进子目录后 cat 时没有仓库根起的前缀），并且那次调用没报错——路径拼错、读失败的不算。
 // `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
-const tailOf = (p) => p.slice(p.lastIndexOf('_context/'));
+// 按完整的目录名找（开头或紧跟 `/`）：领域目录叫 `user_context/` 时不能从它中间截
+const tailOf = (p) => p.slice(p.lastIndexOf('/_context/') + 1);
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result

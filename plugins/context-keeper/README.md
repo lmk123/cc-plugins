@@ -151,8 +151,8 @@ const MAX_RETRY = 3;
 
 0.8.0：项目文档目录从 `.context/` 改名为 `_context/`。点开头的目录 rg 和 Grep 默认不搜，Claude 找相关内容时会漏掉里面的文档。
 
-- 脚本和三个 hook 只认 `_context/`，指向 `.context/` 的指针不再算指针（pointer-guard 不拦、doc-hook 不提醒、检查脚本不查）
-- 检查脚本新增提示：仓库里还有 `.context/` 下的文档时，每个作用域报一次「旧版文档目录」
+- 三个 hook 只认 `_context/`，指向 `.context/` 的指针不再算指针（pointer-guard 不拦、doc-hook 不提醒）
+- 检查脚本新增提示：仓库里还有 `.context/` 下的文档时，每个作用域报一次「旧版文档目录」；CLAUDE.md、rule、skill、文档和源码注释里还写着 `.context/` 路径的指针逐行报「旧版路径」，目录改名后漏改的也查得出来
 
 升级后跑一次 `organize-context`，它会把每个作用域的 `.context/` 用 `git mv` 改名为 `_context/`，并改掉整个仓库里指向旧路径的指针，批准后执行。也可以手动改：
 

@@ -321,3 +321,36 @@ test('旧版 .context/ 目录每个作用域报一次，提示改名为 _context
   assert.deepEqual(legacy.map((f) => f.file).sort(), ['.context/', 'apps/web/.context/']);
   assert.match(legacy.find((f) => f.file === 'apps/web/.context/').msg, /apps\/web\/_context\//);
 });
+
+test('旧版 .context/ 目录里的文件只报旧版目录，不再按类型目录另报', () => {
+  const r = check(makeRepo({ ...CLEAN, [['.context', 'decisions/a.md'].join('/')]: '# 旧\n' }));
+  const mine = r.findings.filter((f) => f.file.startsWith('.context/'));
+  assert.deepEqual(mine.map((f) => f.file), ['.context/']);
+});
+
+test('还指向旧版 .context/ 的指针逐行报出来，目录改名后漏改的也报', () => {
+  const old = ['.context', 'api/retry-policy.md'].join('/');
+  const r = check(makeRepo({
+    ...CLEAN,
+    'src/api/b.ts': `// 改 B 前读 ${old}\nconst B = 1;\nconst s = "${old}";\n`,
+    '.claude/rules/api/b.md': `---\npaths:\n  - "src/api/**"\n---\n\n网关会封 IP。改重试前读 \`${old}\`\n`,
+  }));
+  const legacy = r.findings.filter((f) => f.category === 'pointer' && /旧版路径/.test(f.msg));
+  assert.deepEqual(legacy.map((f) => `${f.file}:${f.line}`).sort(), ['.claude/rules/api/b.md:6', 'src/api/b.ts:1']);
+  assert.match(legacy[0].msg, /_context\/api\/retry-policy\.md/);
+});
+
+test('CLAUDE.md 里指向旧版文档入口的索引行不算带原因', () => {
+  const r = check(makeRepo({ ...CLEAN, 'CLAUDE.md': `# 项目\n\n## 更多上下文\n- 先看 \`${['.context', 'README.md'].join('/')}\`：以前评估过的需求\n` }));
+  assert.ok(!has(r, 'claude-md'));
+});
+
+test('祖先目录名以 _context 结尾时，作用域按完整的 _context/ 目录算', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'libs/app_context/package.json': '{"name":"app_context"}\n',
+    'libs/app_context/_context/api/x.md': '# x\n',
+    'libs/app_context/src/a.ts': '// 网关会封 IP。改重试前读 libs/app_context/_context/api/x.md\nconst A = 1;\n',
+  }));
+  assert.ok(!r.findings.some((f) => f.file === 'libs/app_context/_context/api/x.md'), JSON.stringify(r.findings));
+});
