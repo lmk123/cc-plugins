@@ -8,6 +8,8 @@ export const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 export const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 // skill 目录下的 Markdown（SKILL.md 和它的参考文件）：用到 skill 时才读，同样只该写结论
 export const SKILL_MD_RE = /(^|\/)\.claude\/skills\/.+\.(md|mdx|markdown)$/i;
+// 子代理和命令的定义：同样是 Claude 会加载的文字，里面指向旧版文档的行也是指针
+export const AGENT_MD_RE = /(^|\/)\.claude\/(agents|commands)\/.+\.(md|mdx|markdown)$/i;
 export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
 // 0.9.x 及更早的插件建的项目文档目录（0.7.x 及更早是点开头的那个）：0.10.0 起整个迁走
 export const LEGACY_DOC_DIRS = ['context-docs', '.context'];
@@ -25,8 +27,8 @@ export const NOT_CODE_DIR_RE = new RegExp(String.raw`(^|[\\/])(${[...LEGACY_DOC_
 // 列表项里缩进的续行不算代码块。列表可以嵌套，按层记每一层内容的缩进：
 // 空行之后缩进不够某一层的、新的列表项、标题、引言、围栏和分隔线都退出到够得着的那一层；
 // 不空行接着写的普通文字是上一段的续行，层次不变。`- - -`、`* * *` 是分隔线，不是列表项
-export const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
-export const HR_LINE_RE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
+const HR_LINE_RE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const HEADING_RE = /^[ \t]*#{1,6}(?:[ \t]|$)/;
 const FENCE_RE = /^\s*(```|~~~)/;
 const BLOCK_START_RE = /^[ \t]*(?:>|```|~~~)/;
@@ -59,45 +61,6 @@ export function proseLines(text) {
   });
   return out;
 }
-
-// ---------- 源码注释 ----------
-
-// 源码每一行是不是注释（独立成行的注释、块注释和 Python docstring 的每一行）。
-// 块注释、docstring 要找到收尾才算，否则收尾的那一行三引号会被当成新的开头。返回和 lines 等长的布尔数组
-const COMMENT_RE = /^(\/\/|\/\*|\*|#|--|<!--|;|%|\{\s*\/\*)/;
-const BLOCK_OPEN_RE = /^(?:\{\s*)?(\/\*|<!--)/;
-const CLOSE = { '/*': '*/', '<!--': '-->', '"""': '"""', "'''": "'''" };
-export function commentLines(lines) {
-  const comment = new Array(lines.length).fill(false);
-  for (let k = 0; k < lines.length; k++) {
-    const t = lines[k].trim();
-    if (COMMENT_RE.test(t)) comment[k] = true;
-    let open = null;
-    let at = 0;
-    let doc = false;
-    const m = t.match(BLOCK_OPEN_RE);
-    if (m) {
-      open = m[1];
-      at = m[0].length;
-    } else if (!comment[k]) {
-      const q = t.search(/"""|'''/);
-      if (q === -1) continue;
-      open = t.slice(q, q + 3);
-      at = q + 3;
-      doc = /^[rRuUbBfF]{0,2}$/.test(t.slice(0, q));
-    } else continue;
-    let end = t.indexOf(CLOSE[open], at) !== -1 ? k : -1;
-    for (let j = k + 1; end === -1 && j < lines.length; j++) if (lines[j].includes(CLOSE[open])) end = j;
-    if (end === -1) continue;
-    if (m || doc) for (let j = k; j <= end; j++) comment[j] = true;
-    k = end;
-  }
-  return comment;
-}
-
-// 一行源码里，位置 at 之前有没有行尾注释符：字符串里的路径（输出文件名、测试数据）不是写给人看的
-const TRAILING_COMMENT_RE = /(?:^|\s)(?:\/\/|\/\*|#|--|<!--)/;
-export const trailingCommentBefore = (line, at) => TRAILING_COMMENT_RE.test(line.slice(0, at));
 
 // ---------- 路径段 ----------
 

@@ -1,5 +1,6 @@
-// 找出源码里"独立成段的长注释块"和带信号词的注释行，供 check.mjs 和 comment-hook.mjs 共用。
-// 只认独立成行的注释，行尾注释、/*! license 块，以及各语言的 API 文档注释一律跳过：
+// 源码注释的识别，供 check.mjs 和 comment-hook.mjs 共用：各语言的注释语法（langFor）、
+// "独立成段的长注释块"和带信号词的注释行，以及一行是不是注释（commentLines、trailingCommentBefore）。
+// 找长注释块和信号词时只认独立成行的注释，行尾注释、/*! license 块，以及各语言的 API 文档注释一律跳过：
 // JSDoc/TSDoc（/**）、Rust/C#/Swift/Dart 的 /// 和 //!，Go / Ruby 紧贴在声明前的行注释。
 
 import path from 'node:path';
@@ -12,7 +13,8 @@ const MARKUP = { line: ['//'], block: true, html: true };
 const JS = { ...SLASH, strings: ['`'] };
 const TEXT_BLOCK = { ...SLASH, strings: ['"""'] };
 const DART = { ...SLASH, strings: ['"""', "'''"] };
-const PY = { ...HASH, strings: ['"""', "'''"] };
+// docstring：行首的三引号字符串是文档，算注释
+const PY = { ...HASH, strings: ['"""', "'''"], docstring: true };
 // Go 和 Ruby 没有专门的文档注释语法，紧贴在声明前的行注释就是文档
 const GO = { ...SLASH, strings: ['`'], docBefore: /^(package|func|type|var|const)\b/ };
 const SEMI = { line: [';'], block: false, html: false };
@@ -157,16 +159,70 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   return ctx ? blocksOf(ctx, minLines) : [];
 }
 
-// 带信号词的独立注释行（不含行尾注释），返回 [{ line, text }]
-export function findSignalComments(text, file) {
-  const ctx = prepare(text, file);
-  return ctx ? signalsOf(ctx) : [];
-}
-
-// 两样都要时用这个，省一遍分析
+// 长注释块和带信号词的独立注释行（不含行尾注释）一起找，只分析一遍
 export function analyzeComments(text, file) {
   const ctx = prepare(text, file);
   return ctx ? { blocks: blocksOf(ctx, MIN_BLOCK_LINES), signals: signalsOf(ctx) } : { blocks: [], signals: [] };
+}
+
+// ---------- 一行是不是注释 ----------
+// check.mjs 用来分清旧版文档的路径是写在注释里（写给人看的指针）还是写在可执行的行里（命令参数、字符串、配置值）。
+// 按 lang（langFor 的结果）的注释语法认：`--exclude x`、`**/x` 这类行在不拿 `--`、`*` 当注释符的语言里不是注释。
+// 扩展名表里没有的文件（.env.example、Caddyfile、各种 ignore 文件）只认独立成行或行尾的 `#`、`//`
+
+const UNKNOWN_LANG = { line: ['#', '//'], block: false, html: false };
+const BLOCK_OPEN_RE = /^(?:\{\s*)?(\/\*|<!--)/; // JSX 的 `{/* … */}` 也认
+const CLOSE = { '/*': '*/', '<!--': '-->', '"""': '"""', "'''": "'''" };
+
+// 源码每一行是不是注释：独立成行的行注释、块注释和 docstring 的每一行。返回和 lines 等长的布尔数组。
+// 块注释、docstring 要找到收尾才算，免得把后面整份文件当成注释；赋值给变量的三引号字符串不是注释，
+// 但要整段跳过，否则收尾的那一行三引号会被当成新的开头
+export function commentLines(lines, lang) {
+  const { line: prefixes, block, html, docstring } = lang || UNKNOWN_LANG;
+  const comment = new Array(lines.length).fill(false);
+  for (let k = 0; k < lines.length; k++) {
+    const t = lines[k].trim();
+    if (prefixes.some((p) => t.startsWith(p))) { comment[k] = true; continue; }
+    let open = null;
+    let at = 0;
+    let isComment = true;
+    const m = t.match(BLOCK_OPEN_RE);
+    if (m && (m[1] === '/*' ? block : html)) {
+      open = m[1];
+      at = m[0].length;
+    } else if (docstring) {
+      const q = t.search(/"""|'''/);
+      if (q === -1) continue;
+      open = t.slice(q, q + 3);
+      at = q + 3;
+      isComment = /^[rRuUbBfF]{0,2}$/.test(t.slice(0, q));
+    } else continue;
+    let end = t.indexOf(CLOSE[open], at) !== -1 ? k : -1;
+    for (let j = k + 1; end === -1 && j < lines.length; j++) if (lines[j].includes(CLOSE[open])) end = j;
+    if (end === -1) continue;
+    if (isComment) for (let j = k; j <= end; j++) comment[j] = true;
+    k = end;
+  }
+  return comment;
+}
+
+// 一行源码里，位置 at 落在行尾注释里：at 之前有注释符，注释符前面是空白（`https://` 不算），而且不在字符串里。
+// 字符串只按引号粗略配对；at 之前有没配上对的引号时当作 at 在字符串里
+export function trailingCommentBefore(line, at, lang) {
+  const { line: prefixes, block, html } = lang || UNKNOWN_LANG;
+  const marks = [...prefixes, ...(block ? ['/*'] : []), ...(html ? ['<!--'] : [])];
+  for (let i = 0; i < at; i++) {
+    const c = line[i];
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < at && line[j] !== c) j += line[j] === '\\' ? 2 : 1;
+      if (j >= at) return false;
+      i = j;
+      continue;
+    }
+    if ((i === 0 || /\s/.test(line[i - 1])) && marks.some((p) => line.startsWith(p, i))) return true;
+  }
+  return false;
 }
 
 function blocksOf({ lang, lines, str, runs }, minLines) {

@@ -94,7 +94,7 @@ test('旧版文档目录每个作用域报一次，带文档份数；点开头�
   }));
   const legacy = of(r, 'legacy');
   assert.deepEqual(legacy.map((f) => f.file).sort(), [`apps/web/${DOT}/`, `${DOCS}/`]);
-  assert.match(legacy.find((f) => f.file === `${DOCS}/`).msg, /3 份文档/);
+  assert.match(legacy.find((f) => f.file === `${DOCS}/`).msg, /^旧版文档目录（3 份文档）/);
 });
 
 test('被 .gitignore 忽略的旧版文档目录也报；同名文件、缓存目录、vendor 下的不算', () => {
@@ -125,9 +125,14 @@ test('按类型分的文档目录、.claude/ 下的文档给提示，node_module
     'tools/target/decisions/use-rest.md': '# 用 REST\n',
     '.claude/notes/history.md': '# 历史\n',
     'node_modules/x/decisions/a.md': '# a\n',
+    // 子代理的项目级记忆是 Claude Code 自己的文件
+    '.claude/agent-memory/reviewer/MEMORY.md': '# 记忆\n',
   }));
   assert.deepEqual(files(r, 'legacy'), ['.claude/notes/history.md', 'tools/target/decisions/']);
   assert.match(of(r, 'legacy').find((f) => f.file === 'tools/target/decisions/').msg, /2 份/);
+  // 只是提示，而且不直接叫人删：团队自己的 ADR 也长这样
+  assert.deepEqual(of(r, 'legacy').map((f) => f.level), ['info', 'info']);
+  assert.match(of(r, 'legacy').map((f) => f.msg).join('\n'), /由用户确认[\s\S]*由用户确认/);
 });
 
 test('旧版指针：CLAUDE.md、rule、skill 和它的参考文件、源码注释里的按文件汇总行号', () => {
@@ -143,7 +148,7 @@ test('旧版指针：CLAUDE.md、rule、skill 和它的参考文件、源码注�
   }));
   const by = Object.fromEntries(of(r, 'legacy-pointer').map((f) => [f.file, f]));
   assert.deepEqual(Object.keys(by).sort(), ['.claude/rules/styling/tokens.md', '.claude/skills/release/references/notes.md', 'CLAUDE.md', 'src/api/conf.env', 'src/api/retry.ts']);
-  assert.match(by['src/api/retry.ts'].msg, /3 处指向旧版文档目录：第 1、2、5 行/);
+  assert.match(by['src/api/retry.ts'].msg, /^旧版指针：3 处指向旧版文档目录：第 1、2、5 行/);
   // 字符串里的另列提示：删文档前要由用户改
   assert.deepEqual(of(r, 'legacy-string').map((f) => [f.file, f.line, f.level]), [['src/api/retry.ts', 3, 'info']]);
   assert.equal(by['CLAUDE.md'].line, 7);
@@ -158,6 +163,39 @@ test('旧版指针：代码块里的示例、别的 Markdown、vendor 下的、�
     'src/api/a.ts': `// 读 user-${DOCS}/x.md\nexport const a = 1;\n`,
   }));
   assert.deepEqual(of(r, 'legacy-pointer'), []);
+});
+
+test('旧版指针：可执行的行里的路径不是指针，按语言的注释语法分，另列代码字符串', () => {
+  const p = `${DOCS}/api/retry.md`;
+  const r = check(makeRepo({
+    ...CLEAN,
+    [p]: '# 重试\n',
+    'scripts/pack.sh': `#!/bin/sh\n# 打包前读 ${p}\nrsync -a --exclude ${DOCS}/ src/ dst/\ntar czf out.tgz \\\n  --exclude ${DOCS}/ .\n`,
+    '.github/workflows/ci.yml': `jobs:\n  x:\n    steps:\n      - run: prettier --check . --ignore-path ${DOCS}/x\n`,
+    '.prettierignore': `**/${DOCS}/\n`,
+    'src/api/b.ts': `const doc = base + " #see " + "${p}";\n`,
+    'infra/Caddyfile': `# 改转发规则前读 ${p}\nreverse_proxy x\n`,
+  }));
+  assert.deepEqual(of(r, 'legacy-pointer').map((f) => [f.file, f.line]), [['infra/Caddyfile', 1], ['scripts/pack.sh', 2]]);
+  assert.deepEqual(files(r, 'legacy-string'), ['.github/workflows/ci.yml', '.prettierignore', 'scripts/pack.sh', 'src/api/b.ts']);
+  assert.match(of(r, 'legacy-string').find((f) => f.file === 'scripts/pack.sh').msg, /2 行.*第 3、5 行/);
+});
+
+test('旧版指针：子代理和命令的定义里的算指针；别的 Markdown 只在还有旧版文档时给提示', () => {
+  const p = `${DOCS}/api/retry.md`;
+  const others = {
+    '.claude/agents/reviewer.md': `---\nname: reviewer\ndescription: 评审\n---\n\n改重试前读 ${p}\n`,
+    '.claude/commands/fix.md': `改重试前读 ${p}\n`,
+    'docs/arch.md': `# 架构\n\n详见 [重试](../${p})\n\n\`\`\`\ncat ${p}\n\`\`\`\n`,
+  };
+  const r = check(makeRepo({ ...CLEAN, ...others, [p]: '# 重试\n' }));
+  assert.deepEqual(files(r, 'legacy-pointer'), ['.claude/agents/reviewer.md', '.claude/commands/fix.md']);
+  assert.deepEqual(of(r, 'legacy-mention').map((f) => [f.file, f.line, f.level]), [['docs/arch.md', 3, 'info']]);
+  assert.equal(r.scale[0].legacyPointers, 2);
+  // 文档删完以后，别的 Markdown 里剩下的不再提；Claude 会加载的照报
+  const after = check(makeRepo({ ...CLEAN, ...others }));
+  assert.deepEqual(of(after, 'legacy-mention'), []);
+  assert.deepEqual(files(after, 'legacy-pointer'), ['.claude/agents/reviewer.md', '.claude/commands/fix.md']);
 });
 
 test('CLAUDE.md 带原因的行报警告，指向旧版文档的行只报旧版指针', () => {
@@ -181,7 +219,7 @@ test('叙述形态：完整日期、状态词、叙述词按文件汇总，年�
     'CLAUDE.local.md': '- 以前用 A\n',
   }));
   assert.deepEqual(files(r, 'prune-narrative'), ['.claude/rules/styling/story.md', '.claude/skills/release/references/notes.md']);
-  assert.match(of(r, 'prune-narrative').find((f) => f.file.endsWith('story.md')).msg, /3 行.*第 7、8、9 行/);
+  assert.match(of(r, 'prune-narrative').find((f) => f.file.endsWith('story.md')).msg, /^叙述形态：3 行.*第 7、8、9 行/);
 });
 
 test('过宽的 rule：paths 超过 10 项才报，花括号不展开', () => {

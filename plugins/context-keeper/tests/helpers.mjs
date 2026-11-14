@@ -1,4 +1,4 @@
-// 测试共用：建临时仓库、跑 comment-hook 和检查脚本。跑法：node --test plugins/context-keeper/tests/
+// 测试共用：建临时仓库、跑 comment-hook 和检查脚本。跑法：node --test plugins/context-keeper/tests/*.test.mjs
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

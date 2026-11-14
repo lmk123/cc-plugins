@@ -82,7 +82,7 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
   node <插件目录>/scripts/check.mjs [路径] [--comments]
   ```
 
-  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、`@` import、CLAUDE.md 里带原因的行、`.claude/rules/` 和 `.claude/skills/` 有没有被 `.gitignore` 忽略、旧版的文档目录和指向它的指针（代码字符串里提到它的另列提示）；另列一块「修剪候选」（过宽的 rule、强调泛滥、带日期和状态的叙述），开头给出每个作用域的规模。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
+  检查 rule 的 `paths` 是否生效、rule 是否过长、单文件 rule、`@` import、CLAUDE.md 里带原因的行、`.claude/rules/` 和 `.claude/skills/` 有没有被 `.gitignore` 忽略、旧版的文档目录和指向它的指针（代码字符串、别的 Markdown 里提到它的另列提示）；另列一块「修剪候选」（过宽的 rule、强调泛滥、带日期和状态的叙述），开头给出每个作用域的规模。有错误时退出码为 1。没有依赖，接 CI 时把 `check.mjs` 连同 `lib/` 目录一起复制进项目。
 
 ## 改造前后
 
