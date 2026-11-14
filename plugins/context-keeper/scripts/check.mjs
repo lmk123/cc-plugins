@@ -14,8 +14,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
-  CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
-  commentLines, escapeLinkPath, inComment, isDocLink, linkDefs, linkPath, pointersIn, proseLines,
+  CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, HR_LINE_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, LIST_MARK_RE, MARKDOWN_RE, NOT_CODE_DIR_RE,
+  RULE_RE, SKILL_RE, commentLines, escapeLinkPath, inComment, isDocLink, linkDefs, linkedFile, linkPath, pointersIn, proseLines,
   resolvePointer as resolveWith, rootPathOf, segmentIndex, splitLine, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
@@ -555,12 +555,6 @@ function relTarget(f, p, target) {
   const fixed = escapeLinkPath(path.posix.relative(path.posix.dirname(f), p)) + (raw.match(/[#?].*$/)?.[0] ?? '');
   return angled ? `<${fixed}>` : fixed;
 }
-// 写成仓库根起的路径、按仓库根找得到文档的链接目标，返回那份文档（仓库根起的路径），不是这种的返回 null。
-// 按仓库根找到的不是文档（碰巧有个同名的普通文件）时不算：多半是相对链接指的文档没了，不该改去指那个文件
-function rootDocOf(target) {
-  const p = rootPathOf(target);
-  return p && DOC_RE.test(p) && pointerExists(p) ? p : null;
-}
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
   const i = segmentIndex(p, LEGACY_MARK);
@@ -601,8 +595,7 @@ const legacyPointerMsg = (legacy) => {
   const fixes = legacy.map((x) => (x.fixed ? `${x.label ?? x.raw} → ${x.fixed}` : `${x.label ?? x.raw}（指不到文件，确认路径后把 \`${LEGACY_MARK}\` 换成 \`${DOC_MARK}\`）`));
   return `旧版路径：0.8.0 起文档目录改名为 \`${DOC_MARK}\`，改成新路径：${fixes.join('、')}。目录改名之后旧路径就指不到文件了，pointer-guard 和 doc-hook 也不再认这些指针`;
 };
-const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
-const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_ITEM_RE, '').replace(/^\[[ xX]\]\s+/, '');
+const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_MARK_RE, '').replace(/^\[[ xX]\]\s+/, '');
 // 下面几个判断都是机械的：只看路径前面（或折行时的上一行）有没有话，不判断那句话是文档标题还是重点。
 // 「[重试策略](路径)」「- 重试策略」这种只有标题的登记行认不出来，要 organize-context 读内容看：
 // 标题和短结论靠字面分不开（"会话管理"和"网关会封 IP"），猜错了会让人去改一行本来正确的登记行
@@ -620,7 +613,7 @@ function isLead(line) {
   return /^(?:[#|]|<!--)/.test(t) || (/(?:[：:]|按需读[。.]?)$/.test(t) && introducesDocs(t));
 }
 // 顶格写、只是提到文档的话（"api 相关的项目文档。改动前先看有没有相关的。"）：没以冒号结尾的引言
-const mentionsDocsOnly = (line) => /^\S/.test(line) && !LIST_ITEM_RE.test(line) && introducesDocs(line.trim());
+const mentionsDocsOnly = (line) => /^\S/.test(line) && !LIST_MARK_RE.test(line) && introducesDocs(line.trim());
 // 一段文字去掉标点、符号、emoji 之后剩下的字。什么都不剩，或只剩"见""文档"这类不带信息的引导词，等于没有话
 const wordsOf = (s) => s.replace(/[^\p{L}\p{N}]/gu, '');
 const LEAD_IN_RE = /^(?:详见|参见|参考|见|文档|链接|这里|seealso|see|referto|docs?|link|here)?$/i;
@@ -649,16 +642,15 @@ function carriesHead(prev) {
 // 顶格写、只是提到文档的话，后面紧跟着登记行（中间可以隔空行）时是引言，不算；后面是别的话时算正文。
 // 表格只有表头和分隔行不算，不带指针的数据行是正文；分隔线（---）不算。代码块是正文：rule 里的代码示例就是"怎么做"
 const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
-const HR_RE = /^([-*_])(?:\s*\1){2,}$/;
 function hasOwnContent(text, parse) {
   const fm = parseFrontmatter(text);
   const lines = fm ? fm.body : text.split(/\r?\n/);
   let afterPointer = false;
   return lines.some((l, i) => {
     const t = l.trim();
-    if (!t || HR_RE.test(t)) { afterPointer = false; return false; }
+    if (!t || HR_LINE_RE.test(t)) { afterPointer = false; return false; }
     if (hasPointer(parse(l))) { afterPointer = true; return false; }
-    afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
+    afterPointer = afterPointer && /^\s/.test(l) && !LIST_MARK_RE.test(l);
     if (afterPointer) return false;
     if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
     if (!mentionsDocsOnly(l)) return carriesHead(l);
@@ -684,7 +676,7 @@ for (const f of filesMentioningContext()) {
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
-  const parse = lineParser(f, isMd ? linkDefs(text) : null);
+  const parse = lineParser(f, isMd ? linkDefs(text, prose) : null);
   const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text, parse)));
   const register = (p) => {
     if (!fromDoc) referenced.add(p);
@@ -726,7 +718,7 @@ for (const f of filesMentioningContext()) {
     // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
-    const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
+    const separate = isMd ? LIST_MARK_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
     const folded = !separate && !hasPointer(parse(prev)); // 这一行接着上一行写
     const near = folded ? `${prev}\n${own}` : own;
     // 折行的登记行，重点在上一行时，路径打头不算没写重点
@@ -751,7 +743,8 @@ for (const f of filesMentioningContext()) {
       }
     }
     for (const l of links) {
-      if (l.resolved && pointerExists(l.resolved)) {
+      const doc = linkedFile(l, pointerExists);
+      if (doc && doc === l.resolved) {
         register(l.resolved);
         // 链接文字里也写了路径的，两边要指向同一份文档：改了一边忘了另一边，点开的和 grep 到的就不是一份了
         for (const raw of pointersIn(l.text)) {
@@ -761,7 +754,6 @@ for (const f of filesMentioningContext()) {
         continue;
       }
       // 写成仓库根起的路径的，按仓库根找得到的那份文档照样登记：同一份文档不再另报孤儿、缺索引，只报下面这条写法错误
-      const doc = rootDocOf(l.target);
       if (doc) register(doc);
       if (!strict || l.ref) continue; // 引用式用法的目标失效在定义行报，不在每个用到它的地方重复报
       add('error', 'pointer', f, doc

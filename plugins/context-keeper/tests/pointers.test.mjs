@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ANY_POINTER_RE, LEGACY_POINTER_RE, escapeLinkPath, isDocLink, lastSegmentIndex, linkDefs, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines,
+  ANY_POINTER_RE, LEGACY_POINTER_RE, escapeLinkPath, isDocLink, lastSegmentIndex, linkDefs, linkedFile, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines,
   resolveLink, resolvePointer, rootPathOf, segmentIndex, splitLine, TRIGGER_RE,
 } from '../scripts/lib/pointers.mjs';
 
@@ -165,8 +165,45 @@ test('proseLines 跳过缩进代码块，列表项里缩进的续行不算代码
   assert.deepEqual(proseLines('a\n\n    b', true).map(([, i]) => i), [0, 1, 2]);
 });
 
+test('proseLines：`- - -`、`* * *` 是分隔线不是列表项；标题、分隔线、围栏结束之后不空行也能开始缩进代码块', () => {
+  const idx = (t) => proseLines(t).map(([, i]) => i);
+  assert.deepEqual(idx('* * *\n\n    代码'), [0, 1]);
+  assert.deepEqual(idx('- - -\n\n    代码'), [0, 1]);
+  assert.deepEqual(idx('## 示例\n    代码\n正文'), [0, 2]);
+  assert.deepEqual(idx('***\n    代码'), [0]);
+  assert.deepEqual(idx('```\nx\n```\n    代码\n正文'), [4]);
+  // 段落后面缩进的行是续行，不是代码块
+  assert.deepEqual(idx('正文\n    续行'), [0, 1]);
+});
+
 test('linkDefs 不认缩进代码块里的定义', () => {
   assert.deepEqual([...linkDefs('正文\n\n    [r]: ../x.md\n')], []);
+});
+
+test('目标后面还有别的字的 `[x]: …` 不是定义，行里的纯文本指针照样认', () => {
+  const line = '[必读]: 改重试次数前读 context-docs/retry.md';
+  assert.deepEqual([...linkDefs(line)], []);
+  const { links, scan } = splitLine('CLAUDE.md', line, linkDefs(line));
+  assert.deepEqual(links, []);
+  assert.deepEqual(pointersIn(scan), ['context-docs/retry.md']);
+  // 带标题的照样是定义
+  assert.deepEqual([...linkDefs('[r]: x.md "标题"\n[s]: <y z.md> (标题)  \n')], [['r', 'x.md'], ['s', '<y z.md>']]);
+});
+
+test('linksIn：双反引号行内代码里带单个反引号的，里面的链接也是示例', () => {
+  assert.deepEqual(linksIn('见 ``a ` [x](context-docs/a.md)`` 和 [y](b.md)').map((l) => l.target), ['b.md']);
+  assert.deepEqual(linksIn('`a` [x](b.md) `c`').map((l) => l.target), ['b.md']);
+});
+
+test('linkedFile：按所在目录找得到的优先；找不到时写成仓库根起的路径、按仓库根找得到文档的算指到那份文档', () => {
+  const files = new Set(['context-docs/a.md', 'pkg/context-docs/a.md', 'notes/x.md']);
+  const exists = (p) => files.has(p);
+  const link = (f, line) => splitLine(f, line, new Map()).links[0];
+  assert.equal(linkedFile(link('pkg/CLAUDE.md', '[a](context-docs/a.md)'), exists), 'pkg/context-docs/a.md');
+  assert.equal(linkedFile(link('src/CLAUDE.md', '[a](context-docs/a.md)'), exists), 'context-docs/a.md');
+  assert.equal(linkedFile(link('src/CLAUDE.md', '[a](../context-docs/b.md)'), exists), null);
+  // 按仓库根找到的不是文档时不算
+  assert.equal(linkedFile(link('src/CLAUDE.md', '[a](notes/x.md)'), exists), null);
 });
 
 test('linkPath 逐段解码，%23、%3F 这类保留字符也解；escapeLinkPath 转义回去', () => {

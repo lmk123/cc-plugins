@@ -64,6 +64,7 @@ test('指到它的行超过 10 处时只列 10 处，其余给出数目', () => 
   const msg = docHook(makeRepo({ [DOC]: '# 重试策略\n', 'src/a.ts': `${lines}\n` }), { file: DOC });
   assert.equal(msg.split('\n').filter((l) => l.startsWith('- src/a.ts:')).length, 10);
   assert.match(msg, /另有 2 处没列出/);
+  assert.match(msg, /grep retry-policy\.md 看/); // 相对链接里只有文件名
 });
 
 test('CONTEXT_KEEPER_DOC_HOOK=0 时关闭', () => {

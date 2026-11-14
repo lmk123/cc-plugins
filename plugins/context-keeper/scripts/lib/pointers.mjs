@@ -31,32 +31,42 @@ export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
 export const isPointerMarkdown = (f) => RULE_RE.test(f) || ENTRY_RE.test(f) || CLAUDE_MD_RE.test(f) || SKILL_RE.test(f);
 
 // Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认代码块。
-// 缩进代码块也不返回：空行之后缩进 4 格以上（在列表项里从列表项内容的缩进算起）的行，到缩进不够的行为止。
+// 缩进代码块也不返回：缩进 4 格以上（在列表项里从列表项内容的缩进算起）的行，到缩进不够的行为止。
+// 缩进代码块不能打断段落：只在空行、标题、分隔线、围栏结束之后（或文件开头）才算开始。
 // 列表项里缩进的续行（含缩进的引用式定义）不算代码块。列表可以嵌套，按层记每一层内容的缩进：
 // 空行之后缩进不够某一层的、新的列表项、标题、引言、围栏和分隔线（不空行直接接在列表后面也一样）都退出到够得着的那一层；
-// 不空行接着写的普通文字是上一段的续行，层次不变
-const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
-const BLOCK_START_RE = /^[ \t]*(?:#{1,6}(?:[ \t]|$)|>|```|~~~|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
+// 不空行接着写的普通文字是上一段的续行，层次不变。`- - -`、`* * *` 是分隔线，不是列表项
+export const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/; // 列表项的标记，check.mjs 判断新的列表项也用它
+export const HR_LINE_RE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/; // 分隔线
+const HEADING_RE = /^[ \t]*#{1,6}(?:[ \t]|$)/;
+const FENCE_RE = /^\s*(```|~~~)/;
+const BLOCK_START_RE = /^[ \t]*(?:>|```|~~~)/; // 另外还有标题、分隔线
 const widthOf = (s) => s.replace(/\t/g, '    ').length;
 export function proseLines(text, plain = false) {
   const out = [];
   let fence = false;
   const lists = []; // 所在的各层列表项内容的缩进，外层在前
   let blank = true; // 上一行是空行（或文件开头）
-  let code = false; // 上一行是缩进代码块
+  let codeOk = true; // 这里可以开始（或接着）缩进代码块：上一行是空行、标题、分隔线、围栏结束或缩进代码块
   text.split(/\r?\n/).forEach((line, i) => {
     if (plain) { out.push([line, i]); return; }
     if (!fence) {
-      if (!line.trim()) { blank = true; out.push([line, i]); return; }
+      if (!line.trim()) { blank = codeOk = true; out.push([line, i]); return; }
       const indent = widthOf(line.match(/^[ \t]*/)[0]);
-      const m = line.match(LIST_MARK_RE);
-      if (blank || m || BLOCK_START_RE.test(line)) while (lists.length && lists[lists.length - 1] > indent) lists.pop();
-      if ((blank || code) && indent >= (lists[lists.length - 1] ?? 0) + 4) { code = true; blank = false; return; }
-      code = false;
-      if (m) lists.push(widthOf(m[0]));
+      const hr = HR_LINE_RE.test(line);
+      const heading = HEADING_RE.test(line);
+      const m = hr ? null : line.match(LIST_MARK_RE);
+      if (blank || m || hr || heading || BLOCK_START_RE.test(line)) while (lists.length && lists[lists.length - 1] > indent) lists.pop();
       blank = false;
+      if (codeOk && indent >= (lists[lists.length - 1] ?? 0) + 4) return;
+      if (m) lists.push(widthOf(m[0]));
+      codeOk = hr || heading;
     }
-    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+    if (FENCE_RE.test(line)) {
+      fence = !fence;
+      if (!fence) codeOk = true;
+      return;
+    }
     if (!fence) out.push([line, i]);
   });
   return out;
@@ -110,18 +120,21 @@ export function pointersIn(line, re = POINTER_RE) {
 
 // 行内链接 `[文字](目标 "标题")`（文字里允许一层方括号，目标可以用尖括号包起来）、引用式定义 `[id]: 目标`
 // 和引用式用法 `[文字][id]`、`[id][]`、`[id]`（id 有定义时）。脚注定义 `[^1]: …` 后面是正文，不是链接目标。
-// 定义行不限缩进（列表项里的定义要缩进），免得被当成引用式用法。反斜杠转义的 `\[` 不是链接。
+// 定义行不限缩进（列表项里的定义要缩进），免得被当成引用式用法；目标（和标题）后面还有别的字的不是定义（`[注意]: 改 X 前读 …`），
+// 按普通的行查。反斜杠转义的 `\[` 不是链接。
 // 行内代码里的是示例，先抹掉
 const INLINE_LINK_RE = /(?<!\\)\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*(<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-const LINK_DEF_RE = /^(\s*\[(?!\^)([^\]]+)\]:[ \t]*)(<[^>\n]*>|\S+)/;
+const LINK_DEF_RE = /^(\s*\[(?!\^)([^\]]+)\]:[ \t]*)(<[^>\n]*>|\S+)(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/;
 const REF_LINK_RE = /(?<!\\)\[((?:[^[\]]|\[[^\]]*\])*)\](?:\[([^\]]*)\])?/g;
-const maskCode = (line) => line.replace(/(`+)[^`]*?\1/g, (s) => ' '.repeat(s.length));
+// 行内代码按开头的反引号个数配对：```` ``a ` b`` ```` 里的单个反引号不结束代码
+const maskCode = (line) => line.replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, (s) => ' '.repeat(s.length));
 const refKey = (s) => s.trim().replace(/\s+/g, ' ').toLowerCase(); // 引用 id 不分大小写，连续空白算一个
 
-// 一份 Markdown 里引用式链接的定义（代码块外的）：Map<id, 目标>，同一个 id 以第一次定义为准
-export function linkDefs(text) {
+// 一份 Markdown 里引用式链接的定义（代码块外的）：Map<id, 目标>，同一个 id 以第一次定义为准。
+// prose 是 proseLines(text) 的结果，调用方已经算过的传进来，不再切一遍
+export function linkDefs(text, prose = proseLines(text)) {
   const defs = new Map();
-  for (const [line] of proseLines(text)) {
+  for (const [line] of prose) {
     const d = maskCode(line).match(LINK_DEF_RE);
     if (d && !defs.has(refKey(d[2]))) defs.set(refKey(d[2]), line.slice(d[1].length, d[1].length + d[3].length));
   }
@@ -190,6 +203,16 @@ export function resolveLink(file, target) {
 export function rootPathOf(target) {
   const t = linkPath(target);
   return t && !/^(?:\/|\.\.?\/)/.test(t) ? resolveLink('', target) : null;
+}
+
+// 链接实际指到的文件（仓库根起）：按所在目录解析找得到的就是它（不论是不是文档）；找不到、目标写成了仓库根起的路径、
+// 按仓库根找得到一份文档（含旧目录里的）的，算指到那份文档（0.8.0 整理时改出来的写法：check.mjs 报错，doc-hook 照样列）。
+// 按仓库根找到的不是文档（碰巧有个同名的普通文件）时不算：多半是相对链接指的文档没了，不该改去指那个文件。都不是返回 null。
+// l 是 splitLine 解析出来的链接（带 resolved），exists(p) 判断仓库根起的路径是否存在
+export function linkedFile(l, exists) {
+  if (l.resolved && exists(l.resolved)) return l.resolved;
+  const p = rootPathOf(l.target);
+  return p && (DOC_RE.test(p) || LEGACY_DOC_RE.test(p)) && exists(p) ? p : null;
 }
 
 // 一行拆成链接和抹掉链接目标后的行（scan）：纯文本指针在 scan 上找，按仓库根解析；链接目标按 file 的目录解析，记在 resolved 上。

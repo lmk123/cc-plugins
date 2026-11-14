@@ -15,8 +15,8 @@ import { spawn } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
   ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
-  commentLines, escapeLinkPath, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, pointersIn, proseLines, resolvePointer,
-  rootPathOf, splitLine,
+  commentLines, escapeLinkPath, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, linkedFile, pointersIn, proseLines,
+  resolvePointer, splitLine,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -84,15 +84,15 @@ for (const f of [...candidates].sort()) {
     continue;
   }
   const comment = isMd ? null : commentLines(text.split(/\r?\n/)).comment;
-  const defs = isMd ? linkDefs(text) : null;
-  for (const [line, i] of proseLines(text, !isMd)) {
+  const prose = proseLines(text, !isMd);
+  const defs = isMd ? linkDefs(text, prose) : null;
+  for (const [line, i] of prose) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
     // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析。引用式链接列用到它的那一行（重点写在那里），不列定义行。
     // 链接目标写成仓库根起的路径、按所在目录指不到文件的（0.8.0 整理时改出来的写法，check.mjs 报错）也列：那一行的重点照样是从这份文档提炼的
     const { links, scan } = splitLine(f, line, defs);
     const raw = pointersIn(scan, ANY_POINTER_RE).find((x) => resolvePointer(x, exists) === doc);
-    const linked = links.some((l) => !l.def
-      && (l.resolved === doc || ((!l.resolved || !exists(l.resolved)) && rootPathOf(l.target) === doc)));
+    const linked = links.some((l) => !l.def && linkedFile(l, exists) === doc);
     // 链接只在 Markdown 里认，源码看纯文本指针是不是写在注释里
     if (isMd ? !raw && !linked : !raw || !inComment(line, i, comment, raw)) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
@@ -124,7 +124,8 @@ const msg = repeat
   : [
     `[context-keeper] 刚改的 ${doc} 被下面${rows.length + more > 1 ? '几' : '这一'}处指到，每一行里的重点都是从这份文档提炼的：`,
     ...rows,
-    ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
+    // 相对链接里只有所在文件起的路径，按完整路径 grep 不到
+    ...(more ? [`（另有 ${more} 处没列出：纯文本指针 grep ${doc} 看，Markdown 里的相对链接只写到文件名，grep ${base} 看）`] : []),
     '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
     ...(isLegacyDoc(doc) ? [`这份文档在${LEGACY_RENAME_HINT}。`] : []),
   ].join('\n');
