@@ -626,3 +626,33 @@ test('链接文字是带中文路径段的路径时也算路径打头', () => {
     '- [context-docs/接口/retry-policy.md](../../../context-docs/接口/retry-policy.md)：改重试次数前读',
   ], { 'context-docs/接口/retry-policy.md': '# 重试策略\n' }), [1]);
 });
+
+test('按仓库根找到的不是文档时不给改法：相对链接指的文档没了，只报失效', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'models/kiro.md': '# 根目录下碰巧同名的普通文件\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0039](models/kiro.md)\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/m/context-docs/models/migrate.md');
+  assert.ok(f && /链接指向不存在的文件 models\/kiro\.md/.test(f.msg), JSON.stringify(r.findings));
+  assert.ok(!has(r, 'pointer', /写成了仓库根起的路径/));
+});
+
+test('文件名带 #、括号的文档：转义了的相对链接有效，改好的路径也转义', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/c# (v2).md': '# c#\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [a](../targets/c%23%20%28v2%29.md) 和 [b](apps/m/context-docs/targets/c%23%20%28v2%29.md#节)\n',
+  }));
+  const fs = r.findings.filter((x) => x.file === 'apps/m/context-docs/models/migrate.md');
+  assert.equal(fs.length, 1, JSON.stringify(r.findings));
+  assert.match(fs[0].msg, /改成 \.\.\/targets\/c%23%20%28v2%29\.md#节/);
+});
+
+test('缩进代码块里的示例链接不查', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/CLAUDE.md': '# m\n\n- 新增模型前读 [模型迁移](context-docs/models/migrate.md)\n\n示例：\n\n    [r]: context-docs/api/nope.md\n',
+  }));
+  assert.deepEqual(r.findings, []);
+});

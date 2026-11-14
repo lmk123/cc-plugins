@@ -15,8 +15,8 @@ import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
   CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
-  commentLines, inComment, isDocLink, linkDefs, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
-  resolvePointer as resolveWith, segmentIndex, TRIGGER_RE,
+  commentLines, escapeLinkPath, inComment, isDocLink, linkDefs, linkPath, pointersIn, proseLines,
+  resolvePointer as resolveWith, segmentIndex, splitLine, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
@@ -532,16 +532,14 @@ const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p)
 const resolvePointer = (p) => resolveWith(p, pointerExists);
 // 文件 f 里的一行拆成：links（全部 Markdown 链接）、scan（抹掉链接目标的行，纯文本指针在这上面找）、found（纯文本指针）、
 // docLinks（指向文档的链接，目标按 f 的目录解析，带 resolved；旧目录的另算，见 legacyLinksIn）。f 不是 Markdown 时只有纯文本指针。
-// hasOwnContent、折行判断和逐行检查都要用同一行，同一个文件里每行只解析一次。defs 是 f 里引用式链接的定义
-function lineParser(f, isMd, defs) {
+// hasOwnContent、折行判断和逐行检查都要用同一行，同一个文件里每行只解析一次。defs 是 f 里引用式链接的定义，f 不是 Markdown 时为 null
+function lineParser(f, defs) {
   const memo = new Map();
   return (line) => {
     let p = memo.get(line);
     if (!p) {
-      const links = isMd ? linksIn(line, defs) : [];
-      const scan = links.length ? maskLinkTargets(line, links) : line;
-      const docLinks = links.map((l) => ({ ...l, resolved: resolveLink(f, l.target) })).filter((l) => isDocLink(l.resolved, l.target));
-      p = { links, scan, found: pointersIn(scan), docLinks };
+      const { links, scan } = splitLine(f, line, defs);
+      p = { links, scan, found: pointersIn(scan), docLinks: links.filter((l) => isDocLink(l.resolved, l.target)) };
       memo.set(line, p);
     }
     return p;
@@ -558,18 +556,18 @@ function rootPathOf(target) {
   return p === '..' || p.startsWith('../') ? null : p;
 }
 // 仓库根起的路径 p 在文件 f 里该写成的链接目标：所在文件起的相对路径。原目标的 `#锚点`、`?查询` 和尖括号照留；
-// 路径是 linkPath 解码后的字，空格、`)`、`%` 这类原样写回去会弄断链接，转义回去
-const escapeSeg = (s) => s.replace(/[%\s()<>]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+// 路径是 linkPath 解码后的字，空格、`)`、`#` 这类原样写回去会弄断链接，用 escapeLinkPath 转义回去
 function relTarget(f, p, target) {
   const angled = target.startsWith('<');
   const raw = angled ? target.slice(1, -1) : target;
-  const fixed = path.posix.relative(path.posix.dirname(f), p).split('/').map(escapeSeg).join('/') + (raw.match(/[#?].*$/)?.[0] ?? '');
+  const fixed = escapeLinkPath(path.posix.relative(path.posix.dirname(f), p)) + (raw.match(/[#?].*$/)?.[0] ?? '');
   return angled ? `<${fixed}>` : fixed;
 }
-// 写成仓库根起的路径、按仓库根找得到文件的链接目标，给出改好的相对路径
+// 写成仓库根起的路径、按仓库根找得到文档的链接目标，给出改好的相对路径。
+// 按仓库根找到的不是文档（碰巧有个同名的普通文件）时不给：多半是相对链接指的文档没了，不该改去指那个文件
 function linkFix(f, target) {
   const p = rootPathOf(target);
-  return p && pointerExists(p) ? relTarget(f, p, target) : null;
+  return p && DOC_RE.test(p) && pointerExists(p) ? relTarget(f, p, target) : null;
 }
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
@@ -599,7 +597,7 @@ const legacyLinksIn = (f, links) => links.flatMap((l) => {
   const t = linkPath(l.target);
   if (t === null || segmentIndex(t.replace(/^\//, ''), LEGACY_MARK) === -1 || !MARKDOWN_RE.test(t)) return [];
   const found = (p) => p && (pointerExists(toNewDir(p)) || pointerExists(p));
-  const rel = resolveLink(f, l.target);
+  const rel = l.resolved;
   const root = found(rel) ? null : rootPathOf(l.target);
   const p = found(rel) ? rel : found(root) ? root : null;
   if (!p) return [{ raw: l.target, fixed: null, doc: null, link: true }];
@@ -694,7 +692,7 @@ for (const f of filesMentioningContext()) {
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
-  const parse = lineParser(f, isMd, isMd ? linkDefs(text) : null);
+  const parse = lineParser(f, isMd ? linkDefs(text) : null);
   const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text, parse)));
   const register = (p) => {
     if (!fromDoc) referenced.add(p);
@@ -719,9 +717,9 @@ for (const f of filesMentioningContext()) {
     const stale = [];
     if (warnLegacy) {
       for (const x of [...legacy.filter((y) => isMd || inComment(line, i, cm, y.raw)), ...legacyLinks]) {
-        const k = stale.findIndex((y) => y.raw === x.raw && (!y.fixed || !x.fixed || y.fixed === x.fixed));
-        if (k === -1) stale.push(x);
-        else if (!stale[k].fixed && x.fixed) stale[k] = x;
+        const dup = stale.findIndex((y) => y.raw === x.raw && (!y.fixed || !x.fixed || y.fixed === x.fixed));
+        if (dup === -1) stale.push(x);
+        else if (!stale[dup].fixed && x.fixed) stale[dup] = x;
       }
       for (const x of stale) if (x.link && stale.some((y) => y !== x && y.raw === x.raw)) x.label = `链接目标 ${x.raw}`;
     }
@@ -754,7 +752,7 @@ for (const f of filesMentioningContext()) {
       else if (strict) {
         // 写在链接文字里的，多半是照着相对的链接目标抄的：点得开的链接被报失效，要说清楚是文字要改、改成什么
         const l = allLinks.find((x) => pointersIn(x.text).includes(raw));
-        const to = l && resolveLink(f, l.target);
+        const to = l?.resolved;
         add('error', 'pointer', f, l
           ? `链接文字里的路径 ${raw} 指不到文件：链接文字里写的路径按纯文本算，从仓库根写起${to && pointerExists(to) ? `，这条链接指向的是 ${to}，文字改成它` : ''}`
           : `指针指向不存在的文件 ${raw}（纯文本指针写仓库根起的路径；Markdown 链接的目标另按所在文件的目录解析）`, i + 1);

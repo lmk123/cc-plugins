@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ANY_POINTER_RE, LEGACY_POINTER_RE, isDocLink, lastSegmentIndex, linkDefs, linksIn, maskLinkTargets, pointersIn, resolveLink, resolvePointer, segmentIndex, TRIGGER_RE,
+  ANY_POINTER_RE, LEGACY_POINTER_RE, escapeLinkPath, isDocLink, lastSegmentIndex, linkDefs, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines,
+  resolveLink, resolvePointer, segmentIndex, splitLine, TRIGGER_RE,
 } from '../scripts/lib/pointers.mjs';
 
 // 传给 TRIGGER_RE 的是去掉指针路径之后的那一行
@@ -131,4 +132,38 @@ test('linksIn：反斜杠转义的方括号不是链接，缩进的定义行是�
 
 test('isDocLink 只认新目录，写了旧目录的链接另报旧版路径', () => {
   assert.ok(!isDocLink('.context/api/a.md', '.context/api/a.md'));
+});
+
+test('proseLines 跳过缩进代码块，列表项里缩进的续行不算代码块', () => {
+  const idx = (text) => proseLines(text).filter(([l]) => l.trim()).map(([, i]) => i);
+  // 空行之后缩进 4 格：代码块，到缩进不够的行为止
+  assert.deepEqual(idx('正文\n\n    [r]: context-docs/x.md\n    第二行\n回到正文'), [0, 4]);
+  // 没有空行隔开的缩进行是段落的续行
+  assert.deepEqual(idx('正文\n    续行'), [0, 1]);
+  // 列表项里从内容的缩进算起：缩进 4 格的定义是列表项的续行，缩进 6 格才是代码块
+  assert.deepEqual(idx('- 列表\n\n    [m]: ../x.md\n\n      代码'), [0, 2]);
+  // 空行之后缩进不够、不是列表项的，离开了列表
+  assert.deepEqual(idx('- 列表\n\n正文\n\n    代码'), [0, 2]);
+  // 源码不认代码块
+  assert.deepEqual(proseLines('a\n\n    b', true).map(([, i]) => i), [0, 1, 2]);
+});
+
+test('linkDefs 不认缩进代码块里的定义', () => {
+  assert.deepEqual([...linkDefs('正文\n\n    [r]: ../x.md\n')], []);
+});
+
+test('linkPath 逐段解码，%23、%3F 这类保留字符也解；escapeLinkPath 转义回去', () => {
+  assert.equal(linkPath('api/c%23-notes.md#节'), 'api/c#-notes.md');
+  assert.equal(linkPath('api/a%3Fb%20c.md'), 'api/a?b c.md');
+  assert.equal(linkPath('api/100%.md'), 'api/100%.md'); // 解不开的段照留
+  assert.equal(escapeLinkPath('../api/c# (v2)?.md'), '../api/c%23%20%28v2%29%3F.md');
+  assert.equal(linkPath(escapeLinkPath('a/c# (v2)?%.md')), 'a/c# (v2)?%.md');
+});
+
+test('splitLine：链接带上按所在文件解析的 resolved，scan 抹掉链接目标；不是 Markdown 时不认链接', () => {
+  const line = '改前读 [a](../api/x.md) 和 context-docs/api/y.md';
+  const { links, scan } = splitLine('context-docs/models/m.md', line, new Map());
+  assert.deepEqual(links.map((l) => l.resolved), ['context-docs/api/x.md']);
+  assert.deepEqual(pointersIn(scan), ['context-docs/api/y.md']);
+  assert.deepEqual(splitLine('src/a.ts', line, null), { links: [], scan: line });
 });

@@ -1,5 +1,6 @@
 // 指向 context-docs/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
-// 指针一律写仓库根起的路径（`<作用域>/context-docs/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
+// 纯文本指针写仓库根起的路径（`<作用域>/context-docs/<领域>/<slug>.md`）；Markdown 链接的目标按所在文件的目录解析（见下面「Markdown 链接」）。
+// 这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,12 +30,30 @@ export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
 // 其他 Markdown（README、CHANGELOG、对外文档）里的路径多半是示例或历史记录，不算指针
 export const isPointerMarkdown = (f) => RULE_RE.test(f) || ENTRY_RE.test(f) || CLAUDE_MD_RE.test(f) || SKILL_RE.test(f);
 
-// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认围栏
+// Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认代码块。
+// 缩进代码块也不返回：空行之后缩进 4 格以上（在列表项里从列表项内容的缩进算起）的行，到缩进不够的行为止。
+// 列表项里缩进的续行（含缩进的引用式定义）不算代码块
+const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
+const widthOf = (s) => s.replace(/\t/g, '    ').length;
 export function proseLines(text, plain = false) {
   const out = [];
   let fence = false;
+  let list = null; // 所在列表项内容的缩进，不在列表里为 null
+  let blank = true; // 上一行是空行（或文件开头）
+  let code = false; // 上一行是缩进代码块
   text.split(/\r?\n/).forEach((line, i) => {
-    if (!plain && /^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
+    if (plain) { out.push([line, i]); return; }
+    if (!fence) {
+      if (!line.trim()) { blank = true; out.push([line, i]); return; }
+      const indent = widthOf(line.match(/^[ \t]*/)[0]);
+      if ((blank || code) && indent >= (list ?? 0) + 4) { code = true; blank = false; return; }
+      code = false;
+      const m = line.match(LIST_MARK_RE);
+      if (m) list = widthOf(m[0]);
+      else if (blank && indent < (list ?? 0)) list = null; // 空行之后缩进不够，离开了列表
+      blank = false;
+    }
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
     if (!fence) out.push([line, i]);
   });
   return out;
@@ -139,15 +158,19 @@ export function maskLinkTargets(line, links = linksIn(line)) {
   return out;
 }
 
-// 链接目标里的文件路径：去掉尖括号、`#锚点`、`?查询`，解码 %20 这类转义。外链（带协议、`//` 开头）和纯锚点返回 null
+// 链接目标里的文件路径：去掉尖括号、`#锚点`、`?查询`，解码 %20 这类转义。外链（带协议、`//` 开头）和纯锚点返回 null。
+// 逐段用 decodeURIComponent 解码：decodeURI 不解 %23、%3F 这类保留字符，文件名里的 `#`、`?` 只能这样写
 export function linkPath(target) {
   let t = target.replace(/^<|>$/g, '');
   if (/^[a-z][a-z\d+.-]*:/i.test(t) || t.startsWith('//')) return null;
   t = t.replace(/[#?].*$/, '');
   if (!t) return null;
-  try { t = decodeURI(t); } catch {}
-  return t;
+  return t.split('/').map((s) => { try { return decodeURIComponent(s); } catch { return s; } }).join('/');
 }
+
+// 解码后的路径写回链接目标：空格、括号、尖括号、`%`、`#`、`?` 原样写会弄断链接或被当成锚点、查询，转义回去，`/` 照留。
+// check.mjs 给出改好的链接目标、doc-hook 按文件名筛链接都用它，两边写法一致
+export const escapeLinkPath = (s) => s.replace(/[%\s()<>#?]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 
 // 链接目标解析成仓库根起的路径。file 是链接所在文件（仓库根起）。解析到仓库外、或不是文件路径的返回 null
 export function resolveLink(file, target) {
@@ -155,6 +178,13 @@ export function resolveLink(file, target) {
   if (t === null) return null;
   const p = t.startsWith('/') ? path.posix.normalize(t.slice(1)) : path.posix.join(path.posix.dirname(file), t);
   return !p || p === '.' || p.startsWith('../') || p === '..' ? null : p;
+}
+
+// 一行拆成链接和抹掉链接目标后的行（scan）：纯文本指针在 scan 上找，按仓库根解析；链接目标按 file 的目录解析，记在 resolved 上。
+// check.mjs 和 doc-hook 都用它，口径一致。defs 是 file 里引用式链接的定义（linkDefs 的结果），为 null 时（不是 Markdown）不认链接
+export function splitLine(file, line, defs) {
+  const links = defs ? linksIn(line, defs).map((l) => ({ ...l, resolved: resolveLink(file, l.target) })) : [];
+  return { links, scan: links.length ? maskLinkTargets(line, links) : line };
 }
 
 // 链接是不是指向文档目录里的 Markdown：解析出来的路径落在文档目录里，或者目标里写了文档目录名。

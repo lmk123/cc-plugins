@@ -15,8 +15,8 @@ import { spawn } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
   ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
-  commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
-  resolvePointer,
+  commentLines, escapeLinkPath, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, pointersIn, proseLines, resolvePointer,
+  splitLine,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -43,8 +43,9 @@ if (DOC_RE.test(doc) ? ENTRY_RE.test(doc) : !LEGACY_DOC_RE.test(doc) || LEGACY_E
 
 // 先用 git grep 筛出提到这份文档的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的），下面逐行解析。
 // 源码只认纯文本指针，按完整路径筛。Markdown 链接的目标是相对所在文件的路径（`../api/x.md`），不含完整路径，
-// 只在 .md 里按文件名筛：原样的、%20 转义空格的、整个 URL 编码的（十六进制大小写都认），和 check.mjs 解码后的口径一致。
-// 两次 grep 同时跑：hook 每次改文档都跑，串着跑要扫两遍工作区的时间。出错、超时（返回 null）都静默退出
+// 只在 .md 里按文件名筛：原样的、%20 转义空格的、整个 URL 编码的、check.mjs 给出改法时的写法（escapeLinkPath，括号、`#` 也转义；
+// 十六进制大小写都认），和 check.mjs 解码后的口径一致。
+// 两次 grep 同时跑：hook 每次改文档都跑，串着跑要扫两遍工作区的时间。一次出错、超时（返回 null）只丢它那一份，另一份照列；两次都失败才静默退出
 const grep = (patterns, flags = [], spec = []) => new Promise((resolve) => {
   const g = spawn('git', ['grep', '-lIz', '--untracked', '-F', ...flags, ...patterns.flatMap((p) => ['-e', p]), '--', ...spec], {
     cwd: root, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
@@ -58,10 +59,10 @@ const grep = (patterns, flags = [], spec = []) => new Promise((resolve) => {
 const base = path.posix.basename(doc);
 const hits = await Promise.all([
   grep([doc]),
-  grep([...new Set([base, base.replace(/ /g, '%20'), encodeURI(base)])], ['-i'], ['*.md']),
+  grep([...new Set([base, base.replace(/ /g, '%20'), encodeURI(base), escapeLinkPath(base)])], ['-i'], ['*.md']),
 ]);
-if (hits.includes(null)) process.exit(0);
-const candidates = new Set(hits.flat());
+if (hits.every((h) => h === null)) process.exit(0);
+const candidates = new Set(hits.flat().filter((f) => f !== null));
 
 // 哪些文件里的路径算指针，和 check.mjs 同一套口径：rule、文档入口、CLAUDE.md、skill 里代码块外的行，
 // 以及认得的源码里注释里的。别的文档里提到它只是互相引用，README、CHANGELOG 这类 Markdown 里的多半是示例，都不算；
@@ -87,9 +88,9 @@ for (const f of [...candidates].sort()) {
   for (const [line, i] of proseLines(text, !isMd)) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
     // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析。引用式链接列用到它的那一行（重点写在那里），不列定义行
-    const links = isMd ? linksIn(line, defs) : [];
-    const hit = pointersIn(isMd ? maskLinkTargets(line, links) : line, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc)
-      || links.some((l) => !l.def && resolveLink(f, l.target) === doc);
+    const { links, scan } = splitLine(f, line, defs);
+    const hit = pointersIn(scan, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc)
+      || links.some((l) => !l.def && l.resolved === doc);
     if (!hit || (!isMd && !inComment(line, i, comment, hit))) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
     const t = line.trim();

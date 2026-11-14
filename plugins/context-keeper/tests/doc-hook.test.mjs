@@ -175,3 +175,13 @@ test('URL 编码的相对链接也列出来', () => {
   assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
   assert.match(msg, /- context-docs\/README\.md:4/);
 });
+
+test('照 check.mjs 的改法转义了括号、# 的相对链接也列出来', () => {
+  const doc = 'context-docs/api/c# (v2).md';
+  const msg = docHook(makeRepo({
+    ...REPO,
+    [doc]: '# c#\n',
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [c#](api/c%23%20%28v2%29.md)\n',
+  }), { file: doc });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+});
