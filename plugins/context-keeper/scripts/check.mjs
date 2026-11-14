@@ -549,32 +549,35 @@ function lineParser(f, isMd, defs) {
 }
 // 一行里有没有指向文档的指针：纯文本的或链接。parsed 是 lineParser 的结果
 const hasPointer = (parsed) => parsed.found.length > 0 || parsed.docLinks.length > 0;
-// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）：按仓库根找得到文件时，给出改好的相对路径。
-// `./`、`../` 开头的是照着所在文件写的相对路径，只是写错了，不按仓库根猜。
-// 原目标的 `#锚点`、`?查询` 和尖括号照留；路径里的各段照抄原目标的写法（%20、%29 这类转义原样保留），
-// 不用 linkPath 解码后的字：解码出来的空格、`)`、`%` 写回去，改出来的就不是链接了
-const escapeSeg = (s) => s.replace(/[%\s()<>]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
-function linkFix(f, target) {
+// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）时，按仓库根解析出来的路径。
+// `/` 开头的本来就按仓库根解析；`./`、`../` 开头的是照着所在文件写的相对路径，只是写错了，不按仓库根猜。不是这种写法的返回 null
+function rootPathOf(target) {
   const t = linkPath(target);
   if (!t || /^(?:\/|\.\.?\/)/.test(t)) return null;
   const p = path.posix.normalize(t);
-  if (p === '..' || p.startsWith('../') || !pointerExists(p)) return null;
+  return p === '..' || p.startsWith('../') ? null : p;
+}
+// 仓库根起的路径 p 在文件 f 里该写成的链接目标：所在文件起的相对路径。原目标的 `#锚点`、`?查询` 和尖括号照留；
+// 路径是 linkPath 解码后的字，空格、`)`、`%` 这类原样写回去会弄断链接，转义回去
+const escapeSeg = (s) => s.replace(/[%\s()<>]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+function relTarget(f, p, target) {
   const angled = target.startsWith('<');
   const raw = angled ? target.slice(1, -1) : target;
-  const suffix = raw.match(/[#?].*$/)?.[0] ?? '';
-  const rel = path.posix.relative(path.posix.dirname(f), p).split('/');
-  const n = rel.length - rel.findIndex((s) => s !== '..'); // rel 末尾取自 p 的段数，前面都是 `..`
-  const rawSegs = path.posix.normalize(raw.slice(0, raw.length - suffix.length)).split('/');
-  // 原目标和解码后的段数对不上（转义了 `.` 之类）时，改用解码后的段重新转义
-  const tail = rawSegs.length === p.split('/').length ? rawSegs.slice(-n) : rel.slice(-n).map(escapeSeg);
-  const fixed = [...rel.slice(0, rel.length - n), ...tail].join('/') + suffix;
+  const fixed = path.posix.relative(path.posix.dirname(f), p).split('/').map(escapeSeg).join('/') + (raw.match(/[#?].*$/)?.[0] ?? '');
   return angled ? `<${fixed}>` : fixed;
+}
+// 写成仓库根起的路径、按仓库根找得到文件的链接目标，给出改好的相对路径
+function linkFix(f, target) {
+  const p = rootPathOf(target);
+  return p && pointerExists(p) ? relTarget(f, p, target) : null;
 }
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
   const i = segmentIndex(p, LEGACY_MARK);
   return i === -1 ? p : p.slice(0, i) + DOC_MARK + p.slice(i + LEGACY_MARK.length);
 };
+// 链接目标里的旧目录名换成新的，其余照原样写：尖括号包着的先拆开再换（`<` 后面不算路径段的开头）
+const toNewDirTarget = (target) => (target.startsWith('<') ? `<${toNewDir(target.slice(1, -1))}>` : toNewDir(target));
 // 紧贴中文时前面的字会被并进第一段，按旧路径或改名后的路径找得到文件时去掉。
 // 返回 { raw, fixed }：找不到文件的 fixed 为 null，前面并进来的字去不掉，不给具体的新路径。
 // 传进来的是抹掉链接目标的行，链接目标另由 legacyLinksIn 按所在文件的目录解析
@@ -588,18 +591,24 @@ const legacyPointersIn = (line) => {
 };
 // 链接目标里写了旧目录名的（目标里没写、只是文件本身在旧目录里的相对链接，目录整个改名后照样有效，不报）。
 // 引用式用法的目标在定义行里，只在定义行报。links 是这一行解析好的链接。
-// 返回 { raw, fixed, doc }：doc 是改名后的文档路径（存在时），fixed 是改好的链接目标
+// 先按所在文件的目录解析，找不到再按仓库根找：0.7.x 的规范要求链接目标也写仓库根起的路径，子目录的文件里这样写的，
+// 改好的目标直接给所在文件起的相对路径，免得改了旧目录名又被报"写成了仓库根起的路径"。
+// 返回 { raw, fixed, doc, link }：doc 是改名后的文档路径（存在时），fixed 是改好的链接目标
 const legacyLinksIn = (f, links) => links.flatMap((l) => {
   if (l.ref) return [];
   const t = linkPath(l.target);
   if (t === null || segmentIndex(t.replace(/^\//, ''), LEGACY_MARK) === -1 || !MARKDOWN_RE.test(t)) return [];
-  const p = resolveLink(f, l.target);
-  const doc = p && pointerExists(toNewDir(p)) ? toNewDir(p) : null;
-  return [{ raw: l.target, fixed: doc || (p && pointerExists(p)) ? toNewDir(l.target) : null, doc }];
+  const found = (p) => p && (pointerExists(toNewDir(p)) || pointerExists(p));
+  const rel = resolveLink(f, l.target);
+  const root = found(rel) ? null : rootPathOf(l.target);
+  const p = found(rel) ? rel : found(root) ? root : null;
+  if (!p) return [{ raw: l.target, fixed: null, doc: null, link: true }];
+  const doc = pointerExists(toNewDir(p)) ? toNewDir(p) : null;
+  return [{ raw: l.target, fixed: p === rel ? toNewDirTarget(l.target) : relTarget(f, toNewDir(p), l.target), doc, link: true }];
 });
 // 旧版路径的提示：改名前 hook 照样认旧路径，但目录一改名旧路径就指不到文件了，hook 也跟着认不出来
 const legacyPointerMsg = (legacy) => {
-  const fixes = legacy.map((x) => (x.fixed ? `${x.raw} → ${x.fixed}` : `${x.raw}（指不到文件，确认路径后把 \`${LEGACY_MARK}\` 换成 \`${DOC_MARK}\`）`));
+  const fixes = legacy.map((x) => (x.fixed ? `${x.label ?? x.raw} → ${x.fixed}` : `${x.label ?? x.raw}（指不到文件，确认路径后把 \`${LEGACY_MARK}\` 换成 \`${DOC_MARK}\`）`));
   return `旧版路径：0.8.0 起文档目录改名为 \`${DOC_MARK}\`，改成新路径：${fixes.join('、')}。目录改名之后旧路径就指不到文件了，pointer-guard 和 doc-hook 也不再认这些指针`;
 };
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
@@ -705,14 +714,16 @@ for (const f of filesMentioningContext()) {
     for (const x of legacy) if (x.fixed && pointerExists(x.fixed)) register(x.fixed);
     const legacyLinks = hasLegacy && isMd ? legacyLinksIn(f, allLinks) : [];
     for (const x of legacyLinks) if (x.doc) register(x.doc);
-    // 链接文字和链接目标写的是同一个旧路径时只列一次，取给得出新路径的那条
+    // 链接文字和链接目标写的是同一个旧路径、改法也一样时只列一次，取给得出新路径的那条。
+    // 改法不一样（子目录里文字从仓库根写，目标要改成相对路径）时两条都列，目标那条注明是链接目标
     const stale = [];
     if (warnLegacy) {
       for (const x of [...legacy.filter((y) => isMd || inComment(line, i, cm, y.raw)), ...legacyLinks]) {
-        const k = stale.findIndex((y) => y.raw === x.raw);
+        const k = stale.findIndex((y) => y.raw === x.raw && (!y.fixed || !x.fixed || y.fixed === x.fixed));
         if (k === -1) stale.push(x);
         else if (!stale[k].fixed && x.fixed) stale[k] = x;
       }
+      for (const x of stale) if (x.link && stale.some((y) => y !== x && y.raw === x.raw)) x.label = `链接目标 ${x.raw}`;
     }
     if (stale.length) add('warn', 'pointer', f, legacyPointerMsg(stale), i + 1);
     if (!found.length && !links.length) return;
@@ -741,7 +752,12 @@ for (const f of filesMentioningContext()) {
       const p = resolvePointer(raw);
       if (p) register(p);
       else if (strict) {
-        add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（纯文本指针写仓库根起的路径；Markdown 链接的目标另按所在文件的目录解析）`, i + 1);
+        // 写在链接文字里的，多半是照着相对的链接目标抄的：点得开的链接被报失效，要说清楚是文字要改、改成什么
+        const l = allLinks.find((x) => pointersIn(x.text).includes(raw));
+        const to = l && resolveLink(f, l.target);
+        add('error', 'pointer', f, l
+          ? `链接文字里的路径 ${raw} 指不到文件：链接文字里写的路径按纯文本算，从仓库根写起${to && pointerExists(to) ? `，这条链接指向的是 ${to}，文字改成它` : ''}`
+          : `指针指向不存在的文件 ${raw}（纯文本指针写仓库根起的路径；Markdown 链接的目标另按所在文件的目录解析）`, i + 1);
       }
     }
     for (const l of links) {

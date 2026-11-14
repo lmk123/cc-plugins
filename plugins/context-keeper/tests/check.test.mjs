@@ -553,7 +553,7 @@ test('链接目标里写了旧目录 .context/：目录已改名的报旧版路�
   assert.ok(notYet.findings.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/old.md → ../../context-docs/api/old.md')), JSON.stringify(notYet.findings));
 });
 
-test('改好的相对路径照抄原目标里的转义：%29、%25 不解码成会弄断链接的字', () => {
+test('改好的相对路径转义会弄断链接的字：)、% 写成 %29、%25', () => {
   const r = check(makeRepo({
     ...LINKED,
     'apps/m/context-docs/targets/b).md': '# b\n',
@@ -578,6 +578,47 @@ test('链接文字和目标写的是同一个旧路径时只列一次', () => {
   const f = r.findings.find((x) => x.file === 'CLAUDE.md' && /旧版路径/.test(x.msg));
   assert.ok(f, JSON.stringify(r.findings));
   assert.equal(f.msg.split('.context/api/retry-policy.md → ').length, 2, f.msg);
+});
+
+test('子目录里链接目标写成仓库根起的旧路径：目录已改名的按新路径登记，直接给出相对路径', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [重试](apps/x/.context/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('apps/x/.context/a.md → context-docs/a.md'), JSON.stringify(r.findings));
+  assert.ok(!has(r, 'orphan'), JSON.stringify(r.findings));
+});
+
+test('子目录里链接文字和目标写同一个仓库根起的旧路径：文字和目标的改法不同，两条都列', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [apps/x/.context/a.md](apps/x/.context/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('apps/x/.context/a.md → apps/x/context-docs/a.md'), JSON.stringify(r.findings));
+  assert.ok(f.msg.includes('链接目标 apps/x/.context/a.md → context-docs/a.md'), f.msg);
+});
+
+test('尖括号包着的旧链接目标也给出新路径', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'CLAUDE.md': `${CLEAN['CLAUDE.md']}- 重试上限 3 次。改重试次数前读 [重试](<.context/api/retry-policy.md>)\n`,
+  }));
+  const f = r.findings.find((x) => x.file === 'CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('<.context/api/retry-policy.md> → <context-docs/api/retry-policy.md>'), JSON.stringify(r.findings));
+});
+
+test('链接文字照着相对的链接目标写、按仓库根指不到文件时，说清楚是链接文字要改、改成什么', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [context-docs/a.md](context-docs/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && x.level === 'error');
+  assert.ok(f && /链接文字里的路径 context-docs\/a\.md 指不到文件.*apps\/x\/context-docs\/a\.md/.test(f.msg), JSON.stringify(r.findings));
 });
 
 test('链接文字是带中文路径段的路径时也算路径打头', () => {
