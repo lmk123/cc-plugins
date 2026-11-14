@@ -86,30 +86,55 @@ export function pointersIn(line, re = POINTER_RE) {
 // 纯文本指针（反引号或裸写的路径）写仓库根起的路径；Markdown 链接的目标按 Markdown 的规矩，相对所在文件的目录解析，
 // 这样在 GitHub、IDE 预览里点得开。开头是 `/` 的按仓库根解析（GitHub 的口径）。两种各按各的规矩校验，互不混用
 
-// 行内链接 `[文字](目标 "标题")`（文字里允许一层方括号，目标可以用尖括号包起来）和引用式定义 `[id]: 目标`。
+// 行内链接 `[文字](目标 "标题")`（文字里允许一层方括号，目标可以用尖括号包起来）、引用式定义 `[id]: 目标`
+// 和引用式用法 `[文字][id]`、`[id][]`、`[id]`（id 有定义时）。脚注定义 `[^1]: …` 后面是正文，不是链接目标。
 // 行内代码里的是示例，先抹掉
 const INLINE_LINK_RE = /\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*(<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-const LINK_DEF_RE = /^(\s{0,3}\[[^\]]+\]:[ \t]*)(<[^>\n]*>|\S+)/;
+const LINK_DEF_RE = /^(\s{0,3}\[(?!\^)([^\]]+)\]:[ \t]*)(<[^>\n]*>|\S+)/;
+const REF_LINK_RE = /\[((?:[^[\]]|\[[^\]]*\])*)\](?:\[([^\]]*)\])?/g;
 const maskCode = (line) => line.replace(/(`+)[^`]*?\1/g, (s) => ' '.repeat(s.length));
+const refKey = (s) => s.trim().replace(/\s+/g, ' ').toLowerCase(); // 引用 id 不分大小写，连续空白算一个
 
-// 一行里的 Markdown 链接：[{ text, target, index, at }]。index 是链接（`[`）在行里的位置，at 是目标在行里的位置
-export function linksIn(line) {
-  if (!line.includes('](') && !line.includes(']:')) return [];
+// 一份 Markdown 里引用式链接的定义（代码块外的）：Map<id, 目标>，同一个 id 以第一次定义为准
+export function linkDefs(text) {
+  const defs = new Map();
+  for (const [line] of proseLines(text)) {
+    const d = maskCode(line).match(LINK_DEF_RE);
+    if (d && !defs.has(refKey(d[2]))) defs.set(refKey(d[2]), line.slice(d[1].length, d[1].length + d[3].length));
+  }
+  return defs;
+}
+
+// 一行里的 Markdown 链接，按出现的顺序：[{ text, target, index, at, def?, ref? }]。index 是链接（`[`）在行里的位置，
+// at 是目标在行里的位置。def 是引用式定义行；ref 是引用式用法，目标取自 defs（linkDefs 的结果），不在这一行里，at 为 -1
+export function linksIn(line, defs) {
+  const refs = defs && defs.size > 0;
+  if (!line.includes('](') && !line.includes(']:') && !(refs && line.includes(']'))) return [];
   const masked = maskCode(line);
   const out = [];
+  let rest = masked; // 认过的行内链接抹掉，剩下的再找引用式用法
   for (const m of masked.matchAll(INLINE_LINK_RE)) {
     const at = m.index + m[0].indexOf(m[2], m[1].length + 3); // 跳过 `[文字](`
     out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target: line.slice(at, at + m[2].length), index: m.index, at });
+    rest = rest.slice(0, m.index) + ' '.repeat(m[0].length) + rest.slice(m.index + m[0].length);
   }
   const d = masked.match(LINK_DEF_RE);
-  if (d) out.push({ text: '', target: line.slice(d[1].length, d[1].length + d[2].length), index: line.search(/\S/), at: d[1].length });
-  return out;
+  if (d) {
+    out.push({ text: '', target: line.slice(d[1].length, d[1].length + d[3].length), index: line.search(/\S/), at: d[1].length, def: true });
+  } else if (refs) {
+    for (const m of rest.matchAll(REF_LINK_RE)) {
+      const target = defs.get(refKey(m[2] || m[1]));
+      if (target !== undefined) out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target, index: m.index, at: -1, ref: true });
+    }
+  }
+  return out.sort((a, b) => a.index - b.index);
 }
 
-// 把一行里的链接目标抹成空格（长度不变，下标照旧），纯文本指针的正则就不会把链接目标当成仓库根起的路径
-export function maskLinkTargets(line) {
+// 把一行里的链接目标抹成空格（长度不变，下标照旧），纯文本指针的正则就不会把链接目标当成仓库根起的路径。
+// links 是这一行已经解析好的链接，不传时现解析
+export function maskLinkTargets(line, links = linksIn(line)) {
   let out = line;
-  for (const l of linksIn(line)) out = out.slice(0, l.at) + ' '.repeat(l.target.length) + out.slice(l.at + l.target.length);
+  for (const l of links) if (l.at >= 0) out = out.slice(0, l.at) + ' '.repeat(l.target.length) + out.slice(l.at + l.target.length);
   return out;
 }
 

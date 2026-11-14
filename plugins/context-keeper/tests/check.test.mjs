@@ -499,3 +499,56 @@ test('外链和代码块里的链接不查', () => {
   }));
   assert.deepEqual(r.findings, []);
 });
+
+test('链接文字是标题加文件名的登记行不算路径打头', () => {
+  assert.deepEqual(bareLinesOf([
+    '- [重试策略 retry-policy.md](../../../context-docs/api/retry-policy.md)：改重试次数前读',
+  ]), []);
+});
+
+test('改好的相对路径保留锚点，空格写成 %20', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/my doc.md': '# my\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [a](apps/m/context-docs/targets/my%20doc.md#节) 和 [b](<apps/m/context-docs/targets/kiro.md?x=1>)\n',
+  }));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/my%20doc\.md#节$/), JSON.stringify(r.findings));
+  assert.ok(has(r, 'pointer', /改成 <\.\.\/targets\/kiro\.md\?x=1>$/), JSON.stringify(r.findings));
+});
+
+test('脚注定义不是链接：里面的纯文本路径照样按仓库根解析', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/m/CLAUDE.md': '# m\n\n- 重试上限 3，改重试次数前读[^1]\n\n[^1]: 改重试次数前读 context-docs/api/retry-policy.md\n',
+  }));
+  assert.deepEqual(r.findings, []);
+});
+
+test('引用式链接：用到它的那一行查写法、算登记，定义行只查目标', () => {
+  const entry = (def) => `${CLEAN['context-docs/README.md']}- 重试上限 3 次。改重试次数前读 [重试策略][r]\n\n${def}\n`;
+  const ok = check(makeRepo({ ...CLEAN, 'context-docs/README.md': entry('[r]: api/retry-policy.md') }));
+  assert.deepEqual(ok.findings, []);
+  const bad = check(makeRepo({ ...CLEAN, 'context-docs/README.md': entry('[R]: api/gone.md') }));
+  const errs = bad.findings.filter((f) => f.level === 'error');
+  assert.equal(errs.length, 1, JSON.stringify(bad.findings));
+  assert.equal(errs[0].line, 6);
+  assert.match(errs[0].msg, /链接指向不存在的文件 api\/gone\.md/);
+});
+
+test('链接目标里写了旧目录 .context/：目录已改名的报旧版路径、按新路径登记，没改名的也报', () => {
+  const renamed = check(makeRepo({
+    ...CLEAN,
+    'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 重试上限 3 次。改重试次数前读 [重试](../.context/api/retry-policy.md)\n`,
+    'apps/m/CLAUDE.md': '# m\n\n- 重试上限 3 次。改重试次数前读 [重试](../../.context/api/retry-policy.md)\n',
+  }));
+  const msgs = renamed.findings.filter((f) => /旧版路径/.test(f.msg));
+  assert.ok(msgs.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/retry-policy.md → ../../context-docs/api/retry-policy.md')), JSON.stringify(renamed.findings));
+  assert.ok(!has(renamed, 'orphan'), JSON.stringify(renamed.findings));
+
+  const notYet = check(makeRepo({
+    ...CLEAN,
+    '.context/api/old.md': '# 旧\n',
+    'apps/m/CLAUDE.md': '# m\n\n- 改旧逻辑前读 [旧](../../.context/api/old.md)\n',
+  }));
+  assert.ok(notYet.findings.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/old.md → ../../context-docs/api/old.md')), JSON.stringify(notYet.findings));
+});

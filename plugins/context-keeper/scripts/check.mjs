@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
   CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
-  commentLines, inComment, isDocLink, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
+  commentLines, inComment, isDocLink, linkDefs, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
   resolvePointer as resolveWith, segmentIndex, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
@@ -530,20 +530,36 @@ function filesMentioningContext() {
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
-// 一行 Markdown 里指向文档的链接，目标按所在文件 f 的目录解析：[{ text, target, index, at, resolved }]。旧目录的另算（legacyLinksIn）
-const docLinksIn = (f, line) => linksIn(line)
-  .map((l) => ({ ...l, resolved: resolveLink(f, l.target) }))
-  .filter((l) => isDocLink(l.resolved, l.target, [DOC_DIR]));
-// 一行里有没有指向文档的指针：纯文本的（链接目标抹掉之后再找）或链接。f 不是 Markdown 时只认纯文本的
-const hasPointer = (line, f) => (MD_SOURCES.has(f)
-  ? pointersIn(maskLinkTargets(line)).length > 0 || docLinksIn(f, line).length > 0
-  : pointersIn(line).length > 0);
-// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）：按仓库根找得到文件时，给出改好的相对路径
+// 文件 f 里的一行拆成：links（全部 Markdown 链接）、scan（抹掉链接目标的行，纯文本指针在这上面找）、found（纯文本指针）、
+// docLinks（指向文档的链接，目标按 f 的目录解析，带 resolved；旧目录的另算，见 legacyLinksIn）。f 不是 Markdown 时只有纯文本指针。
+// hasOwnContent、折行判断和逐行检查都要用同一行，同一个文件里每行只解析一次。defs 是 f 里引用式链接的定义
+function lineParser(f, isMd, defs) {
+  const memo = new Map();
+  return (line) => {
+    let p = memo.get(line);
+    if (!p) {
+      const links = isMd ? linksIn(line, defs) : [];
+      const scan = links.length ? maskLinkTargets(line, links) : line;
+      const docLinks = links.map((l) => ({ ...l, resolved: resolveLink(f, l.target) })).filter((l) => isDocLink(l.resolved, l.target, [DOC_DIR]));
+      p = { links, scan, found: pointersIn(scan), docLinks };
+      memo.set(line, p);
+    }
+    return p;
+  };
+}
+// 一行里有没有指向文档的指针：纯文本的或链接。parsed 是 lineParser 的结果
+const hasPointer = (parsed) => parsed.found.length > 0 || parsed.docLinks.length > 0;
+// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）：按仓库根找得到文件时，给出改好的相对路径。
+// 原目标的 `#锚点`、`?查询` 和尖括号照留，没有尖括号时空格写成 %20（linkPath 解码过），不然改出来的就不是链接了
 function linkFix(f, target) {
   const t = linkPath(target);
   if (!t || t.startsWith('/')) return null;
   const p = path.posix.normalize(t);
-  return pointerExists(p) ? path.posix.relative(path.posix.dirname(f), p) : null;
+  if (p === '..' || p.startsWith('../') || !pointerExists(p)) return null;
+  const angled = target.startsWith('<');
+  const suffix = (angled ? target.slice(1, -1) : target).match(/[#?].*$/)?.[0] ?? '';
+  const rel = path.posix.relative(path.posix.dirname(f), p) + suffix;
+  return angled ? `<${rel}>` : rel.replace(/ /g, '%20');
 }
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
@@ -562,8 +578,10 @@ const legacyPointersIn = (line) => {
   return [...out].map(([raw, fixed]) => ({ raw, fixed }));
 };
 // 链接目标里写了旧目录名的（目标里没写、只是文件本身在旧目录里的相对链接，目录整个改名后照样有效，不报）。
+// 引用式用法的目标在定义行里，只在定义行报。links 是这一行解析好的链接。
 // 返回 { raw, fixed, doc }：doc 是改名后的文档路径（存在时），fixed 是改好的链接目标
-const legacyLinksIn = (f, line) => linksIn(line).flatMap((l) => {
+const legacyLinksIn = (f, links) => links.flatMap((l) => {
+  if (l.ref) return [];
   const t = linkPath(l.target);
   if (t === null || segmentIndex(t.replace(/^\//, ''), LEGACY_MARK) === -1 || !MARKDOWN_RE.test(t)) return [];
   const p = resolveLink(f, l.target);
@@ -606,11 +624,13 @@ function pathFirst(line, raw) {
   if (ENTRY_RE.test(raw)) return false;
   return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, line.indexOf(raw))))) && resolvePointer(raw) === raw;
 }
-// 链接打头的登记行同理：链接文字只是路径、文件名（`[x.md](…)`）或"文档"这类引导词时算路径打头；链接文字是标题时前面有话，不算
+// 链接打头的登记行同理：链接文字只是路径、文件名（`[x.md](…)`）或"文档"这类引导词时算路径打头；链接文字是标题时前面有话，不算。
+// 只去掉文字里的路径、文件名，"重试策略 retry-policy.md"这种标题加文件名的照样算有话
+const LINK_TEXT_PATH_RE = /[\w./-]*\.(?:md|mdx|markdown)(?![\w])/gi;
 function linkFirst(line, link) {
   if (link.resolved && ENTRY_RE.test(link.resolved)) return false;
-  const text = link.text.replace(/`/g, '').trim();
-  return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, link.index)) + (MARKDOWN_RE.test(text) ? '' : text)));
+  const text = link.text.replace(/`/g, '').replace(LINK_TEXT_PATH_RE, '');
+  return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, link.index)) + text));
 }
 // 折行的登记行，上一行是不是它的上半句（重点，或纯参考的"什么时候读"）：有话，而且不是标题、表格行、引言
 function carriesHead(prev) {
@@ -622,20 +642,20 @@ function carriesHead(prev) {
 // 表格只有表头和分隔行不算，不带指针的数据行是正文；分隔线（---）不算。代码块是正文：rule 里的代码示例就是"怎么做"
 const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
 const HR_RE = /^([-*_])(?:\s*\1){2,}$/;
-function hasOwnContent(text, f) {
+function hasOwnContent(text, parse) {
   const fm = parseFrontmatter(text);
   const lines = fm ? fm.body : text.split(/\r?\n/);
   let afterPointer = false;
   return lines.some((l, i) => {
     const t = l.trim();
     if (!t || HR_RE.test(t)) { afterPointer = false; return false; }
-    if (hasPointer(l, f)) { afterPointer = true; return false; }
+    if (hasPointer(parse(l))) { afterPointer = true; return false; }
     afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
     if (afterPointer) return false;
     if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
     if (!mentionsDocsOnly(l)) return carriesHead(l);
     const next = lines.slice(i + 1).find((x) => x.trim());
-    return !(next && hasPointer(next, f));
+    return !(next && hasPointer(parse(next)));
   });
 }
 for (const f of filesMentioningContext()) {
@@ -656,7 +676,8 @@ for (const f of filesMentioningContext()) {
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
-  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text, f)));
+  const parse = lineParser(f, isMd, isMd ? linkDefs(text) : null);
+  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text, parse)));
   const register = (p) => {
     if (!fromDoc) referenced.add(p);
     if (isEntry) inEntry.add(p);
@@ -669,17 +690,17 @@ for (const f of filesMentioningContext()) {
   const warnLegacy = known && !inSkipDir(f);
   prose.forEach(([line, i], k) => {
     // Markdown 里纯文本路径按仓库根解析、链接目标按所在文件的目录解析，分开找：先把链接目标抹掉，纯文本的正则就看不到它
-    const scan = isMd ? maskLinkTargets(line) : line;
+    const { links: allLinks, scan, found, docLinks: links } = parse(line);
     const legacy = hasLegacy ? legacyPointersIn(scan) : [];
     // 目录已经改名、只是指针漏改的，按新路径登记：同一份文档不再另报孤儿、缺索引，只报下面这条旧版路径
     for (const x of legacy) if (x.fixed && pointerExists(x.fixed)) register(x.fixed);
-    const legacyLinks = hasLegacy && isMd ? legacyLinksIn(f, line) : [];
+    const legacyLinks = hasLegacy && isMd ? legacyLinksIn(f, allLinks) : [];
     for (const x of legacyLinks) if (x.doc) register(x.doc);
     const stale = warnLegacy ? [...legacy.filter((x) => isMd || inComment(line, i, cm, x.raw)), ...legacyLinks] : [];
     if (stale.length) add('warn', 'pointer', f, legacyPointerMsg(stale), i + 1);
-    const found = pointersIn(scan);
-    const links = isMd ? docLinksIn(f, line) : [];
     if (!found.length && !links.length) return;
+    // 引用式链接的定义行（`[id]: 目标`）只是目标，重点和什么时候读写在用到它的那一行，写法不查，只查目标在不在
+    const defOnly = !found.length && links.every((l) => l.def);
     const strict = known && (isMd || inComment(line, i, cm, found[0]));
     // 只删指针路径本身：中文正文和路径之间往往没有空格，按"删到下一个空白为止"会把后面的触发条件一起删掉
     let own = scan;
@@ -688,13 +709,13 @@ for (const f of filesMentioningContext()) {
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
     const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
-    const folded = !separate && !hasPointer(prev, f); // 这一行接着上一行写
+    const folded = !separate && !hasPointer(parse(prev)); // 这一行接着上一行写
     const near = folded ? `${prev}\n${own}` : own;
     // 折行的登记行，重点在上一行时，路径打头不算没写重点
     const headAbove = folded && carriesHead(prev);
-    if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
+    if (!defOnly && strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
-    } else if (bareLines && !headAbove && (links.length && (!found.length || links[0].index < scan.indexOf(found[0]))
+    } else if (!defOnly && bareLines && !headAbove && (links.length && (!found.length || links[0].index < scan.indexOf(found[0]))
       ? linkFirst(line, links[0])
       : pathFirst(scan, found[0]))) {
       add('info', 'pointer-style', f, '登记行以路径开头，路径前面没有重点：只有路径和什么时候读的行进了 context 等于什么都没给，Claude 要读完整份文档才拿得到重点。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」），已经写在路径后面的挪到前面；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
@@ -716,7 +737,7 @@ for (const f of filesMentioningContext()) {
         }
         continue;
       }
-      if (!strict) continue;
+      if (!strict || l.ref) continue; // 引用式用法的目标失效在定义行报，不在每个用到它的地方重复报
       const fix = linkFix(f, l.target);
       add('error', 'pointer', f, fix
         ? `链接目标 ${l.target} 写成了仓库根起的路径：Markdown 链接按所在文件的目录解析，现在点开是 404。改成 ${fix}`

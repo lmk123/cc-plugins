@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ANY_POINTER_RE, LEGACY_POINTER_RE, isDocLink, lastSegmentIndex, linksIn, maskLinkTargets, pointersIn, resolveLink, resolvePointer, segmentIndex, TRIGGER_RE,
+  ANY_POINTER_RE, LEGACY_POINTER_RE, isDocLink, lastSegmentIndex, linkDefs, linksIn, maskLinkTargets, pointersIn, resolveLink, resolvePointer, segmentIndex, TRIGGER_RE,
 } from '../scripts/lib/pointers.mjs';
 
 // 传给 TRIGGER_RE 的是去掉指针路径之后的那一行
@@ -109,4 +109,15 @@ test('isDocLink：落在文档目录里的 Markdown，或者目标里写了文�
   assert.ok(!isDocLink('docs/a.md', '../docs/a.md'));
   assert.ok(!isDocLink('context-docs/api/a.png', 'a.png'));
   assert.ok(!isDocLink(null, 'https://x.com/context-docs/a.md'));
+});
+
+test('linksIn 不把脚注定义当链接；引用式用法从 linkDefs 取目标', () => {
+  assert.deepEqual(linksIn('[^1]: context-docs/a.md 说明'), []);
+  const defs = linkDefs('[A]: ../x.md\n```\n[b]: ../y.md\n```\n');
+  assert.deepEqual([...defs], [['a', '../x.md']]);
+  assert.deepEqual(linksIn('读 [文字][a]、[a][]、[A] 和 [b]', defs).map((l) => [l.text, l.target, l.ref]), [
+    ['文字', '../x.md', true], ['a', '../x.md', true], ['A', '../x.md', true],
+  ]);
+  assert.deepEqual(linksIn('[a]: ../x.md', defs).map((l) => l.def), [true]);
+  assert.equal(maskLinkTargets('读 [文字][a]', linksIn('读 [文字][a]', defs)), '读 [文字][a]');
 });

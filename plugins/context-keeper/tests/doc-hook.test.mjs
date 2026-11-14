@@ -156,3 +156,12 @@ test('相对链接指到这份文档的也列出来，解析到别处的同名�
   assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
   assert.doesNotMatch(msg, /README\.md:4/);
 });
+
+test('引用式链接列出用到它的那一行，不列定义行', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试][r]\n\n[r]: api/retry-policy.md\n',
+  }), { file: DOC });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.doesNotMatch(msg, /README\.md:5/);
+});
