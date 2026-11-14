@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findCommentBlocks } from './lib/comments.mjs';
-import { NOT_CODE_DIR_RE } from './lib/pointers.mjs';
+import { DOC_DIR, NOT_CODE_DIR_RE } from './lib/pointers.mjs';
 
 if (process.env.CONTEXT_KEEPER_COMMENT_HOOK === '0') process.exit(0);
 
@@ -102,9 +102,9 @@ if (!hits.length) process.exit(0);
 const msg = [
   `[context-keeper] 刚写入的 ${file} 里有长注释块：${hits.join('、')}。`,
   '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范（用 record-context）拆开：',
-  '注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行；经过、试过的方案、数字等扩展内容移进 context-docs/<领域>/<slug>.md，',
+  `注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行；经过、试过的方案、数字等扩展内容移进 ${DOC_DIR}/<领域>/<slug>.md，`,
   // 示例路径拆开写，免得 check.mjs 把它当成失效指针
-  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数或退避前读 ${['apps/web', 'context-docs', 'api/retry-policy.md'].join('/')}\`。`,
+  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数或退避前读 ${['apps/web', DOC_DIR, 'api/retry-policy.md'].join('/')}\`。`,
   '同样的内容也适用于其他文件时，写成 rule 而不是注释。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
 ].join('');
 

@@ -394,3 +394,20 @@ test('旧版路径指不到文件时，不给拼上中文前缀的新路径', ()
   assert.ok(!/见包\/context-docs/.test(legacy.msg), legacy.msg);
   assert.match(legacy.msg, /指不到文件/);
 });
+
+test('vendor 等第三方目录里还指向旧版 .context/ 的指针不报旧版路径', () => {
+  const old = ['vendor/lib', '.context', 'api/a.md'].join('/');
+  const r = check(makeRepo({ ...CLEAN, [old]: '# 第三方\n', 'vendor/lib/index.js': `// 改重试前读 ${old}\nexport const x = 1;\n` }));
+  assert.ok(!r.findings.some((f) => /旧版路径/.test(f.msg)), JSON.stringify(r.findings));
+});
+
+test('目录已改名、只有指针漏改的：只报旧版路径，不再另报孤儿文档和缺索引', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/billing/tax.md': '# 税率\n',
+    'src/billing/tax.ts': `// 税率按地区取。改税率前读 ${['.context', 'billing/tax.md'].join('/')}\nconst TAX = 1;\n`,
+  }));
+  const mine = r.findings.filter((f) => f.file === 'context-docs/billing/tax.md' || f.file === 'src/billing/tax.ts');
+  assert.deepEqual(mine.map((f) => f.category), ['pointer'], JSON.stringify(r.findings));
+  assert.match(mine[0].msg, /旧版路径/);
+});

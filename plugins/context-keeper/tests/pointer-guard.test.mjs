@@ -196,6 +196,13 @@ test('Windows 路径（反斜杠）Read 过文档也算读过', () => {
   assert.equal(guard(t, { ...edit, session: 'win', transcript: [read, result('t1')] }), null);
 });
 
+test('Windows 路径（反斜杠）Bash 里 cat 过文档也算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const cat = use('t1', 'Bash', { command: `cat ${DOC.split('/').join('\\')}` });
+  assert.equal(guard(t, { ...edit, session: 'win-bash', transcript: [cat, result('t1')] }), null);
+});
+
 test('改名前的旧目录 .context/ 里的指针照样拦，并提示改名', () => {
   const old = ['.context', 'api/retry-policy.md'].join('/');
   const t = makeRepo({ [old]: '# 重试策略\n', 'src/r.ts': `// 改重试次数前读 ${old}\nconst R = 3;\n` });
