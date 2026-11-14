@@ -690,8 +690,12 @@ test('已取代：状态行里出现取代、推翻这类词才报', () => {
     'context-docs/api/old.md': '# 旧方案\n\n状态：已取代，见 context-docs/api/retry-policy.md\n',
     'context-docs/api/bold.md': '# 旧方案\n\n- **状态**：已被推翻（2026-11-10）\n',
     'context-docs/api/live.md': '# 现行\n\n状态：生效\n\n推翻了旧的做法。\n',
+    'context-docs/api/abandoned.md': '# 旧接口\n\nstatus: deprecated\n',
+    // 取代、推翻的是别的文档：这份是现行的
+    'context-docs/api/active.md': '# 现行\n\n状态：生效，取代旧的轮询方案\n',
+    'context-docs/api/active2.md': '# 现行\n\n- **状态**：已采纳，推翻了 0012 的做法\n',
   }));
-  assert.deepEqual(pruneFiles(r, 'prune-superseded'), ['context-docs/api/bold.md', 'context-docs/api/old.md']);
+  assert.deepEqual(pruneFiles(r, 'prune-superseded'), ['context-docs/api/abandoned.md', 'context-docs/api/bold.md', 'context-docs/api/old.md']);
 });
 
 test('决策日志形态：标题带编号或日期、正文按编号互相引用、编号对照表', () => {
@@ -705,8 +709,14 @@ test('决策日志形态：标题带编号或日期、正文按编号互相引�
     'context-docs/log/table.md': `# 口径变更记录\n\n| 旧编号 | 文件 | 时间 |\n|---|---|---|\n${rows}\n`,
     'context-docs/log/year.md': '# 2026 年度预算\n\n上限 50 万。\n',
     'context-docs/log/plain.md': '# 重试策略\n\n端口 0800 不用管。见 `[0035]` 只是示例。\n',
+    // 「见」「决定」后面直接跟数字的是权限、端口这类数字，不是编号
+    'context-docs/log/numbers.md': '# 部署\n\n目录权限见 0755 的说明。决定 0800 端口不对外。\n',
+    // 主题作一级标题、条目作小节的流水：两个以上小节标题带编号或日期才算
+    'context-docs/log/entries.md': '# 重试策略决策记录\n\n## 0029：改上限\n\n上限 5。\n\n## 2026-09-25 · 改回\n\n上限 3。\n',
+    'context-docs/log/measured.md': '# 延迟\n\n上游最慢 3 秒。\n\n## 2026-08 · 实测\n\n28 ms。\n',
   }));
-  assert.deepEqual(pruneFiles(r, 'prune-log'), ['dated-full', 'dated', 'numbered', 'ref', 'table'].map((x) => `context-docs/log/${x}.md`).sort());
+  assert.deepEqual(pruneFiles(r, 'prune-log'), ['dated-full', 'dated', 'entries', 'numbered', 'ref', 'table'].map((x) => `context-docs/log/${x}.md`).sort());
+  assert.match(prune(r, 'prune-log').find((f) => f.file.endsWith('entries.md')).msg, /2 个标题/);
   assert.match(prune(r, 'prune-log').find((f) => f.file.endsWith('table.md')).msg, /编号对照表/);
 });
 
@@ -731,6 +741,8 @@ test('强调泛滥：⚠ 和加粗超过两处给提示，代码块和行内代�
     ...CLEAN,
     '.claude/rules/styling/loud.md': `${fm}⚠️ 改 token 后**必须**跑 \`pnpm tokens:build\`，**否则**不更新。\n`,
     '.claude/rules/styling/ok.md': `${fm}改 token 后**必须**跑 \`**pnpm**\`，⚠️ 页面不报错。\n\n\`\`\`\n**x** ⚠️ **y**\n\`\`\`\n`,
+    // 领域索引 rule 的登记行常用加粗标重点，和行数、paths 项数一样不查
+    '.claude/rules/styling/context-index.md': `${fm}- **改 token** 前读 \`context-docs/api/retry-policy.md\`\n- **改主题** 前读 \`context-docs/api/retry-policy.md\`\n- **改字体** 前读 \`context-docs/api/retry-policy.md\`\n`,
   }));
   assert.deepEqual(pruneFiles(r, 'prune-emphasis'), ['.claude/rules/styling/loud.md']);
   assert.equal(prune(r, 'prune-emphasis')[0].level, 'info');
@@ -752,10 +764,15 @@ test('规模汇总：每个作用域的 rule 条数和正文行数、文档数�
     'apps/web/src/b.ts': 'export const B = 1;\n',
     'apps/web/.claude/rules/api/sync.md': '---\npaths:\n  - "src/*.ts"\n---\n\n改 a 要同步 b。\n不同步会静默算错。\n',
     'apps/web/context-docs/api/limits.md': '# 上限\n',
+    // 源码字符串里的路径不是指针，不计数；不认得注释语法的文件分不出来，照样算
+    'apps/web/src/c.ts': "export const DOC = 'apps/web/context-docs/api/limits.md';\n",
+    'apps/web/.env.example': '# 上限改了先读 apps/web/context-docs/api/limits.md\nLIMIT=3\n',
+    // 没有 paths、常驻加载的 rule 也要算进规模
+    '.claude/rules/always.md': '# 常驻\n\n第一行。\n第二行。\n',
   }));
   const by = Object.fromEntries(r.scale.map((x) => [x.scope ?? '', x]));
-  assert.deepEqual(by[''], { scope: null, rules: 1, ruleLines: 1, docs: 2, pointers: 3 });
-  assert.deepEqual(by['apps/web/'], { scope: 'apps/web/', rules: 1, ruleLines: 2, docs: 1, pointers: 1 });
+  assert.deepEqual(by[''], { scope: null, rules: 2, ruleLines: 4, docs: 2, pointers: 3 });
+  assert.deepEqual(by['apps/web/'], { scope: 'apps/web/', rules: 1, ruleLines: 2, docs: 1, pointers: 2 });
   const only = check(makeRepo({ ...CLEAN, 'apps/web/.claude/rules/x.md': '---\npaths: "a.ts"\n---\n\nx\n', 'apps/web/a.ts': '' }), ['apps/web']);
   assert.deepEqual(only.scale.map((x) => x.scope), ['apps/web/']);
 });
@@ -771,4 +788,21 @@ test('路径参数在别的 git 仓库里时，检查那个仓库', async () => 
   const r = JSON.parse(run.stdout);
   assert.equal(r.root, target.repo);
   assert.ok(r.findings.some((f) => f.category === 'prune-shell' && f.file === 'context-docs/api/shell.md'));
+});
+
+test('路径参数是仓库里的软链接时按链接本身过滤，指向仓库外也不报「不在仓库内」', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const t = makeRepo({ ...CLEAN, 'shared/a.md': '# a\n' });
+  const outside = path.join(t.tmp, 'outside');
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(t.repo, 'ext'));
+  fs.symlinkSync(path.join(t.repo, 'shared'), path.join(t.repo, 'alias'));
+  const ext = check(t, ['ext']);
+  assert.equal(ext.status, 0);
+  assert.equal(ext.filter, 'ext/');
+  assert.equal(check(t, ['alias']).filter, 'alias/'); // 不跟到 shared/
+  // 整个仓库经软链接传进来时照样认得
+  fs.symlinkSync(t.repo, path.join(t.tmp, 'link'));
+  assert.equal(check(t, [path.join(t.tmp, 'link')]).filter, null);
 });

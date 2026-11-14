@@ -76,7 +76,12 @@ if (target) {
   // 规范里的路径都从仓库根写起：在子目录里跑（比如在包目录里启动的会话）、按当前目录找不到时，再按仓库根解析一次
   if (!fs.existsSync(abs) && !path.isAbsolute(target) && fs.existsSync(path.join(ROOT, target))) abs = path.join(ROOT, target);
   // git 给的仓库根是解析过符号链接的（macOS 的 /tmp → /private/tmp），路径也要解析，否则算出来的相对路径以 .. 开头
-  if (fs.existsSync(abs)) abs = fs.realpathSync(abs);
+  // 先只解析所在目录：路径本身是仓库里的软链接时按链接所在的位置算，不跟到链接指向的地方；
+  // 这样算出来在仓库外（路径是指向仓库或仓库里某处的软链接）时，再整条解析
+  if (fs.existsSync(abs)) {
+    const lexical = path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs));
+    abs = path.relative(ROOT, lexical).startsWith('..') ? fs.realpathSync(abs) : lexical;
+  }
   FILTER = path.relative(ROOT, abs).split(path.sep).join('/');
   if (FILTER.startsWith('..')) { console.error(`路径不在仓库内：${target}`); process.exit(2); }
   if (!fs.existsSync(path.join(ROOT, FILTER))) { console.error(`路径不存在：${target}`); process.exit(2); }
@@ -331,6 +336,9 @@ for (const rule of rules) {
   const scope = scopeOf(rule, '.claude/rules/');
   const scopeLabel = scope || '仓库根';
   const fm = parseFrontmatter(text);
+  // 规模汇总在任何 continue 之前记：没有 paths、会常驻的 rule 成本最高，不能漏算
+  const bodyLines = (fm ? fm.body : text.split(/\r?\n/)).filter((l) => l.trim()).length;
+  ruleBodyLines.set(rule, bodyLines);
   if (!fm) {
     if (/^paths\s*:/m.test(text)) add('error', 'rule', rule, 'frontmatter 的 `---` 不在第一行，paths 不生效，这条 rule 会常驻');
     else add('warn', 'rule', rule, '没有 paths，会常驻加载：补 paths，或说明它其实是 ALWAYS');
@@ -352,17 +360,16 @@ for (const rule of rules) {
     add('warn', 'rule', rule, 'paths 只有 "**"，Claude Code 会当作没有 paths，常驻加载：写窄，或说明它其实是 ALWAYS');
     continue;
   }
-  const bodyLines = fm.body.filter((l) => l.trim()).length;
-  ruleBodyLines.set(rule, bodyLines);
   if (bodyLines > RULE_MAX_LINES && !INDEX_RULE_RE.test(rule)) {
     add('warn', 'rule', rule, `正文 ${bodyLines} 行（上限 ${RULE_MAX_LINES}）：命中时整份加载。先删没过准入门槛的行，剩下的仍超过 ${RULE_MAX_LINES} 行，再把数字等扩展内容拆进 ${DOC_MARK} 文档，rule 里留「重点 + 什么时候读 + 路径」`);
   }
   // 按逗号切开、不展开花括号数项数：`*.{ts,tsx}` 是一项
-  const pathItems = (fm.paths || []).flatMap(splitTopLevel).filter((p) => !p.startsWith('!')).length;
+  const pathItems = new Set(positive.map((p) => p.orig)).size;
   if (pathItems > RULE_MAX_PATHS && !INDEX_RULE_RE.test(rule)) {
     add('warn', 'prune-wide-rule', rule, `paths 有 ${pathItems} 项（超过 ${RULE_MAX_PATHS}）：碰到其中任何一个文件，整条都跟着进来，大半行和手上的任务无关。按「谁需要知道」拆窄，没过准入门槛的行删掉；不要靠拆进文档、留指针来解决`);
   }
-  const emphasis = emphasisCount(fm.body.join('\n'));
+  // 领域索引 rule 和上面两条一样不查：登记行的重点常用加粗标出
+  const emphasis = INDEX_RULE_RE.test(rule) ? 0 : emphasisCount(fm.body.join('\n'));
   if (emphasis > EMPHASIS_MAX) {
     add('info', 'prune-emphasis', rule, `强调 ${emphasis} 处（⚠ 和加粗，上限 ${EMPHASIS_MAX}）：处处都强调，等于哪处都不突出。只给最容易做错的那一处留着，其余降回普通文字`);
   }
@@ -487,11 +494,17 @@ for (const d of docs) {
 // 独立成行的占位：可以带列表符号、加粗、「背景：」这种短标签，后面可以跟括号说明。表格单元格里的不算（以 | 开头）
 const PLACEHOLDER_RE = /^(?:>\s*)*(?:[-*+]\s+)?(?:\*\*)?(?:[^：:|`]{1,12}[：:]\s*)?(?:\*\*)?(?:未记录|暂无|待补充|待定|TBD|TODO|N\/A)(?:\*\*)?(?:\s*[（(][^）)\n]*[）)])?\s*[。.]?$/i;
 const STATUS_RE = /^(?:>\s*)*(?:[-*+]\s+)?(?:\*\*)?(?:状态|status)(?:\*\*)?\s*[:：]\s*(.*)$/i;
-const SUPERSEDED_RE = /取代|推翻|废弃|作废|撤销|弃用|\b(?:superseded|deprecated|obsolete|reverted)\b/i;
+// 状态行里「取代 / 推翻」有两种方向：「已取代，见 …」「被推翻」说的是这份文档，「生效，取代旧方案」「推翻了 0012」说的是别的文档。
+// 只认被动的（前面有「被」）和不带宾语的（后面紧跟标点、行尾或「见 / 由 / by」）
+const SUPERSEDE_VERB = '(?:取代|推翻|替代|替换|废弃|作废|撤销|弃用)';
+const SUPERSEDED_RE = new RegExp(
+  `被[^，,。；;]{0,8}?${SUPERSEDE_VERB}|${SUPERSEDE_VERB}(?=\\s*(?:$|[，,。.;；、:：（(—|-]|参见|见|由|于|by\\b))|\\b(?:superseded|deprecated|obsolete|reverted)\\b`,
+  'i',
+);
 // 标题以编号（`0029：`、`ADR-012 …`）或日期（`2026-09-25 ·`、`2026-08 ·`）开头。编号要求 0 开头，免得把「2026 年度预算」当成编号
 const LOG_TITLE_RE = /^#{1,6}\s+(?:\*\*)?(?:(?:ADR[-\s]?)?0\d{2,3}(?=[\s:：.、·\-—]|$)|\d{4}-\d{2}-\d{2}(?=[\s·:：\-—|]|$)|\d{4}-\d{2}(?=\s*[·:：\-—|]))/i;
-// 按编号互相引用：`[0035]`、「推翻 0039」「见 0012」「决策 0034」
-const LOG_REF_RE = /\[0\d{3}\]|(?:推翻|撤销|取代|沿用|修订|接续|参见|见|决策|决定|\bADR)\s*[#-]?\s*\[?0\d{3}\b/i;
+// 按编号互相引用：`[0035]`、「推翻 0039」「决策 0034」「见 #0012」。「见」「决定」后面直接跟数字的不算：「权限见 0755」「决定 0800 端口不对外」
+const LOG_REF_RE = /\[0\d{3}\]|(?:推翻|撤销|取代|沿用|修订|接续|决策|编号|\bADR)\s*[#-]?\s*\[?0\d{3}\b|(?:参见|见)\s*#\s*0\d{3}\b/i;
 // 「旧编号 → 文件」对照表：第一格是编号的表格行
 const NUMBER_ROW_RE = /^\|\s*(?:ADR[-\s]?)?0\d{2,3}\s*\|/i;
 const NUMBER_TABLE_MIN = 5;
@@ -509,17 +522,22 @@ function pruneDoc(d) {
     add('warn', 'prune-superseded', d, `状态是已取代 / 推翻：「${status[0][1].trim().slice(0, 40)}」。整份被取代的删掉，怕有人重提的一两句并进取代它的文档；部分被取代的，删掉被取代的那部分`, status[1] + 1);
   }
   const numberRows = prose.filter(([l]) => NUMBER_ROW_RE.test(l.trim())).length;
-  const title = prose.find(([l]) => /^#{1,6}\s/.test(l));
+  // 第一个标题以编号或日期开头（一份文档一条决策），或者有两个以上这样的标题（主题下按条目记流水）。
+  // 只有一个小节标题带日期的（「## 2026-08 实测」）不算
+  const headings = prose.filter(([l]) => /^#{1,6}\s/.test(l));
+  const logTitles = headings.filter(([l]) => LOG_TITLE_RE.test(l));
+  const title = logTitles.length >= 2 || (headings.length && logTitles[0] === headings[0]) ? logTitles[0] : null;
   const ref = prose.find(([l]) => LOG_REF_RE.test(l.replace(/`[^`]*`/g, '')));
   if (numberRows >= NUMBER_TABLE_MIN) {
     add('warn', 'prune-log', d, `编号对照表：${numberRows} 行「编号 → 文件」。只为兼容旧编号存在的，先在整个仓库 grep 一遍裸编号，代码和文档里都不再按编号引用时删掉`);
-  } else if (title && LOG_TITLE_RE.test(title[0])) {
-    add('warn', 'prune-log', d, `决策日志形态：标题以编号或日期开头（「${title[0].replace(/^#+\s*/, '').slice(0, 30)}」）。按主题合并成一份写现状的文档，经过和流水留给 commit`, title[1] + 1);
+  } else if (title) {
+    add('warn', 'prune-log', d, `决策日志形态：${logTitles.length >= 2 ? `${logTitles.length} 个标题` : '标题'}以编号或日期开头（「${title[0].replace(/^#+\s*/, '').slice(0, 30)}」）。按主题合并成一份写现状的文档，经过和流水留给 commit`, title[1] + 1);
   } else if (ref) {
     add('warn', 'prune-log', d, '决策日志形态：正文按编号互相引用。按主题合并成一份写现状的文档，引用改成文件路径，经过和流水留给 commit', ref[1] + 1);
   }
 }
-for (const d of docs) pruneDoc(d);
+// 规模汇总的文档数直接数 docs，不依赖这里：范围外的文档不用读
+for (const d of docs) if (inScope(d)) pruneDoc(d);
 
 // ---------- context-docs/、.claude/rules/、.claude/skills/ 能否进 git ----------
 
@@ -837,7 +855,10 @@ for (const f of filesMentioningContext()) {
         : `链接指向不存在的文件 ${l.target}（Markdown 链接的目标按所在文件的目录解析，开头是 / 的按仓库根解析）`, i + 1);
     }
     // 规模汇总里的指针数：指得到文档的行，文档之间的互相引用不算
-    if (!fromDoc && (found.some((raw) => resolvePointer(raw)) || links.some((l) => !l.def && linkedFile(l, pointerExists)))) {
+    // 认得注释语法的源码里只算注释里的，和失效指针检查的口径一致：字符串里的路径（输出文件名、测试数据）不是写给人看的指针。
+    // 不认得的文件（.env.example 这类 # 注释）分不出注释和字符串，照样算，和上面算已登记的口径一致
+    const counted = cm ? found.filter((raw) => inComment(line, i, cm, raw)) : found;
+    if (!fromDoc && (counted.some((raw) => resolvePointer(raw)) || links.some((l) => !l.def && linkedFile(l, pointerExists)))) {
       pointerLines.set(f, (pointerLines.get(f) || 0) + 1);
     }
   });
