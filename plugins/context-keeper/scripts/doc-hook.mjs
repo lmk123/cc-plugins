@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
-  ANY_POINTER_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_DOC_RE, LEGACY_ENTRY_RE, MARKDOWN_RE,
+  ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
   commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
@@ -99,7 +99,7 @@ const msg = repeat
     ...rows,
     ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
     '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
-    ...(isLegacyDoc(doc) ? [`这份文档还在旧目录 \`${LEGACY_DOC_DIR}/\`，0.8.0 起要改名为 \`${DOC_DIR}/\`：改完提醒用户跑 organize-context 迁移（把目录 git mv 改名，指针一并改掉）。`] : []),
+    ...(isLegacyDoc(doc) ? [`这份文档在${LEGACY_RENAME_HINT}。`] : []),
   ].join('\n');
 
 process.stdout.write(JSON.stringify({

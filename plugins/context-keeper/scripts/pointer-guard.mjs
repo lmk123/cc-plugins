@@ -13,7 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
-  ANY_POINTER_RE, DOC_DIR, DOC_DIRS, LEGACY_DOC_DIR, MARKDOWN_RE, NOT_CODE_DIR_RE, commentLines, findRoot, isLegacyDoc, pointersIn, resolvePointer, segmentIndex,
+  ANY_POINTER_RE, DOC_DIRS, LEGACY_RENAME_HINT, MARKDOWN_RE, NOT_CODE_DIR_RE, commentLines, findRoot, isLegacyDoc, lastSegmentIndex, pointersIn, resolvePointer,
+  segmentIndex,
 } from './lib/pointers.mjs';
 import { stateFile as stateFileFor } from './lib/state.mjs';
 
@@ -257,12 +258,7 @@ if (!todo.length) process.exit(0);
 // `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
 // 按完整的目录名找最后一个文档目录段：领域目录叫 `user-context-docs/` 时不能从它中间截
-const tailOf = (p) => {
-  const segs = p.split('/');
-  let k = segs.length - 1;
-  while (k > 0 && !DOC_DIRS.includes(segs[k])) k--;
-  return segs.slice(k).join('/');
-};
+const tailOf = (p) => p.slice(Math.max(0, ...DOC_DIRS.map((d) => lastSegmentIndex(p, `${d}/`))));
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result
@@ -347,7 +343,7 @@ const msg = [
   // 指针写的是仓库根起的路径，会话可能开在子目录里：给出绝对路径，免得按当前目录拼错
   `文档的绝对路径：${[...new Set(todo.map((x) => path.join(root, x.doc)))].slice(0, 20).join('、')}`,
   ...(todo.some((x) => isLegacyDoc(x.doc))
-    ? [`其中在旧目录 \`${LEGACY_DOC_DIR}/\` 里的文档，0.8.0 起要改名为 \`${DOC_DIR}/\`：这次先照常处理，改完提醒用户跑 organize-context 迁移（把目录 git mv 改名，指针一并改掉）。`]
+    ? [`其中有文档在${LEGACY_RENAME_HINT}。这次先照常处理。`]
     : []),
   '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
   '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新；领域索引 rule、文档入口里登记这份文档的行，重点跟着不成立的也一并改。',

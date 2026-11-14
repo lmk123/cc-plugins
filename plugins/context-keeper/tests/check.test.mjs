@@ -411,3 +411,22 @@ test('目录已改名、只有指针漏改的：只报旧版路径，不再另�
   assert.deepEqual(mine.map((f) => f.category), ['pointer'], JSON.stringify(r.findings));
   assert.match(mine[0].msg, /旧版路径/);
 });
+
+test('CLAUDE.md 的入口行按完整目录名认：别的目录名里带 context-docs 的照查原因', () => {
+  const r = check(makeRepo(claudeMdWith([
+    '- 做新需求前先看 `context-docs/README.md`：因为评估过的需求都登记在那里',
+    '- 因为历史原因保留旧接口，见 docs/user-context-docs/README.md',
+  ])));
+  const hits = r.findings.filter((f) => f.category === 'claude-md' && /疑似带原因/.test(f.msg));
+  assert.deepEqual(hits.map((f) => f.line), [5]);
+});
+
+test('按类型分的文档目录只跳过 node_modules：build、target 等目录下已跟踪的文档照报', () => {
+  const r = check(makeRepo({ ...CLEAN, 'tools/target/decisions/use-grpc.md': '# 用 gRPC\n', 'node_modules/x/decisions/a.md': '# a\n' }));
+  assert.ok(r.findings.some((f) => f.category === 'misplaced' && f.file === 'tools/target/decisions/use-grpc.md'));
+  assert.ok(!r.findings.some((f) => f.file.startsWith('node_modules/')));
+});
+
+function claudeMdWith(lines) {
+  return { ...CLEAN, 'CLAUDE.md': `# 项目\n\n## 更多上下文\n${lines.join('\n')}\n` };
+}

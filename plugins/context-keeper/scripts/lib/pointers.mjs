@@ -7,10 +7,13 @@ import path from 'node:path';
 // ---------- 文件分类：哪些文件里的路径算指针 ----------
 
 export const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-// 目录名只在这里写一次，下面的正则和各脚本里的判断都从它们生成
+// 目录名在脚本里只写这一次，下面的正则和各脚本里的判断都从它们生成。
+// hooks/hooks.json 里 doc-hook 的 shell 预筛另写了一遍（shell 读不到这里），改目录名时一起改，doc-hook.test.mjs 会对着这两个常量查
 export const DOC_DIR = 'context-docs';
 export const LEGACY_DOC_DIR = '.context'; // 0.7.x 及更早的文档目录：check.mjs 报出来要求改名，hook 在改名前照样认，保护不中断
 export const DOC_DIRS = [DOC_DIR, LEGACY_DOC_DIR];
+// hook 拦下或提醒时，碰到旧目录里的文档附带的改名提示
+export const LEGACY_RENAME_HINT = `旧目录 \`${LEGACY_DOC_DIR}/\` 里，这个目录 0.8.0 起要改名为 \`${DOC_DIR}/\`：改完提醒用户跑 organize-context 迁移（把目录 git mv 改名，指针一并改掉）`;
 const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const underDir = (dir, rest) => new RegExp(String.raw`(^|\/)${reEscape(dir)}\/${rest}$`);
 export const DOC_RE = underDir(DOC_DIR, String.raw`.+\.md`); // 区分大小写：和 POINTER_RE 口径一致
@@ -59,10 +62,11 @@ export function findRoot(file, base) {
 
 // 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见context-docs/…"这种紧贴中文的写法也能认出来。
 // dirs 是文档目录名（不转义）的列表
-export const pointerRe = (dirs) => new RegExp(
+// 返回的正则带 marks（`<目录名>/` 的列表），pointersIn 用它先粗筛
+export const pointerRe = (dirs) => Object.assign(new RegExp(
   String.raw`(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*(?:${dirs.map(reEscape).join('|')})\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])`,
   'gu',
-);
+), { marks: dirs.map((d) => `${d}/`) });
 export const POINTER_RE = pointerRe([DOC_DIR]);
 export const LEGACY_POINTER_RE = pointerRe([LEGACY_DOC_DIR]);
 export const ANY_POINTER_RE = pointerRe([DOC_DIR, LEGACY_DOC_DIR]); // hook 用：改名前的旧指针照样认
@@ -70,7 +74,7 @@ export const ANY_POINTER_RE = pointerRe([DOC_DIR, LEGACY_DOC_DIR]); // hook 用�
 // 一行里的指针原文（去重，去掉开头的 ./）。re 默认只认新目录
 export function pointersIn(line, re = POINTER_RE) {
   const out = [];
-  if (!line.includes('context')) return out; // 两种目录名都含 context，先粗筛
+  if (re.marks && !re.marks.some((m) => line.includes(m))) return out; // 先粗筛：一行里连目录名都没有就不跑正则
   for (const m of line.matchAll(re)) {
     const raw = m[1].replace(/^\.\//, '');
     if (!out.includes(raw)) out.push(raw);
@@ -85,9 +89,17 @@ export const isLegacyDoc = (p) => LEGACY_DOC_RE.test(p);
 // loose 为 true 时（s 是一段命令），前一个字符不是路径名里的字符就算，空白、引号、`<`、`(`、`=` 都行。
 // 两种都不认 `user-context-docs/` 中间的那一截
 const NAME_CHAR_RE = /[\p{L}\p{N}_.-]/u;
+const atSegment = (s, i, loose) => i === 0 || (loose ? !NAME_CHAR_RE.test(s[i - 1]) : s[i - 1] === '/');
 export function segmentIndex(s, marker, loose = false) {
   for (let i = s.indexOf(marker); i !== -1; i = s.indexOf(marker, i + 1)) {
-    if (i === 0 || (loose ? !NAME_CHAR_RE.test(s[i - 1]) : s[i - 1] === '/')) return i;
+    if (atSegment(s, i, loose)) return i;
+  }
+  return -1;
+}
+// 同 segmentIndex（s 是路径），找最后一个
+export function lastSegmentIndex(s, marker) {
+  for (let i = s.lastIndexOf(marker); i !== -1; i = i > 0 ? s.lastIndexOf(marker, i - 1) : -1) {
+    if (atSegment(s, i, false)) return i;
   }
   return -1;
 }

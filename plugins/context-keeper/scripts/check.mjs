@@ -418,7 +418,8 @@ for (const f of claudeMds) {
   claudeMdStats.push({ file: f, lines: text ? lines.length - (/\n$/.test(text) ? 1 : 0) : 0 });
   for (const [line, i] of proseLines(text)) {
     // 指向文档入口的那一行是模板规定的索引行，不算带原因
-    if (!line.includes(ENTRY) && !line.includes(LEGACY_ENTRY) && /(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
+    // 按完整的目录名认：`user-context-docs/README.md` 不是文档入口
+    if (segmentIndex(line, ENTRY, true) === -1 && segmentIndex(line, LEGACY_ENTRY, true) === -1 &&/(因为|当初|以前|原因是|由于|\bbecause\b|\bpreviously\b)/i.test(line)) {
       add('warn', 'claude-md', f, `疑似带原因：「${line.trim().slice(0, 60)}」——CLAUDE.md 只写做什么，原因拆出来：能挂到代码上的进 rule，挂不上的进 ${DOC_MARK} 文档`, i + 1);
     }
   }
@@ -700,7 +701,7 @@ for (const f of FILES) {
   if (CLAUDE_MD_RE.test(f)) continue;
   if (/(^|\/)\.claude\//.test(f) && !CLAUDE_OWN.test(f)) {
     add('warn', 'misplaced', f, `文档放在 \`.claude/\` 下：迁到所属作用域的 \`${DOC_MARK}<领域>/<slug>.md\``);
-  } else if (!DOC_RE.test(f) && /(^|\/)(context\/(decisions|data)|decisions|adrs?)\//.test(f) && !inSkipDir(f)) {
+  } else if (!DOC_RE.test(f) && /(^|\/)(context\/(decisions|data)|decisions|adrs?)\//.test(f) && !/(^|\/)node_modules\//.test(f)) {
     add('info', 'misplaced', f, `疑似按类型分的文档目录（旧版 context/decisions 之类）：确认是文档后迁到 \`${DOC_MARK}<领域>/<slug>.md\``);
   }
 }

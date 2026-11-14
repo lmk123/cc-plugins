@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ANY_POINTER_RE, LEGACY_POINTER_RE, pointersIn, resolvePointer, TRIGGER_RE } from '../scripts/lib/pointers.mjs';
+import { ANY_POINTER_RE, LEGACY_POINTER_RE, lastSegmentIndex, pointersIn, resolvePointer, segmentIndex, TRIGGER_RE } from '../scripts/lib/pointers.mjs';
 
 // 传给 TRIGGER_RE 的是去掉指针路径之后的那一行
 test('TRIGGER_RE 认得写了"什么时候读"的指针', () => {
@@ -59,4 +59,14 @@ test('pointersIn 默认只认新目录；传入旧目录或两种都认的正则
   assert.deepEqual(pointersIn(line), ['pkg/context-docs/b.md']);
   assert.deepEqual(pointersIn(line, LEGACY_POINTER_RE), ['.context/a.md']);
   assert.deepEqual(pointersIn(line, ANY_POINTER_RE), ['.context/a.md', 'pkg/context-docs/b.md']);
+});
+
+test('segmentIndex / lastSegmentIndex 只认完整的目录名', () => {
+  const p = 'a/context-docs/x/user-context-docs/context-docs/y.md';
+  assert.equal(segmentIndex(p, 'context-docs/'), 2);
+  assert.equal(lastSegmentIndex(p, 'context-docs/'), p.lastIndexOf('/context-docs/') + 1);
+  assert.equal(lastSegmentIndex('user-context-docs/y.md', 'context-docs/'), -1);
+  assert.equal(lastSegmentIndex('context-docs/y.md', 'context-docs/'), 0);
+  assert.equal(segmentIndex('cat "user-context-docs/y.md"', 'context-docs/', true), -1);
+  assert.equal(segmentIndex('cat "context-docs/y.md"', 'context-docs/', true), 5);
 });

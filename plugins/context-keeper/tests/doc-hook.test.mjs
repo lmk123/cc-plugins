@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { DOC_DIRS } from '../scripts/lib/pointers.mjs';
 import { SCRIPTS, makeRepo, docHook, sessionStart } from './helpers.mjs';
 
 const DOC = 'context-docs/api/retry-policy.md';
@@ -107,6 +109,30 @@ test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录
   const miss = run('src/api/retry.ts');
   assert.equal(miss.status, 0);
   assert.equal(miss.stdout, '');
+});
+
+// shell 预筛读不到 pointers.mjs 里的目录名，是另写的一遍：对着 DOC_DIRS 逐个查，改目录名时漏改 hooks.json 会在这里失败。
+// 换一个只打印标记的假 doc-hook.mjs，只看预筛放没放行；Windows 路径在 payload 里是 JSON 转义过的 `\\`
+test('hooks.json 里的预筛：每个文档目录的正斜杠和 Windows 路径都放行，别的路径不起 node', { skip: process.platform === 'win32' }, () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(SCRIPTS, '..', 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;
+  const cmd = hooks.flatMap((h) => h.hooks).map((h) => h.command).find((c) => c.includes('doc-hook.mjs'));
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'ck-prefilter-'));
+  fs.mkdirSync(path.join(fake, 'scripts'));
+  fs.writeFileSync(path.join(fake, 'scripts', 'doc-hook.mjs'), "process.stdout.write('RAN');\n");
+  const ran = (file) => spawnSync('sh', ['-c', cmd], {
+    input: JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: file } }),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PLUGIN_ROOT: fake },
+  }).stdout === 'RAN';
+  try {
+    for (const dir of DOC_DIRS) {
+      assert.ok(ran(`/repo/${dir}/api/a.md`), dir);
+      assert.ok(ran(`C:\\repo\\${dir}\\api\\a.md`), `${dir}（Windows）`);
+    }
+    assert.ok(!ran('/repo/src/context/a.ts'));
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
 });
 
 test('改名前改了旧目录 .context/ 里的文档，照样列出指到它的行，并提示改名', () => {

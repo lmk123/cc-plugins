@@ -154,11 +154,13 @@ const MAX_RETRY = 3;
 - 改名之前，pointer-guard 和 doc-hook 照样认 `.context/` 的指针和文档，保护不中断；拦下或提醒时附带一句改名提示
 - 检查脚本新增提示：仓库里还有 `.context/` 下的文档时，每个作用域报一次「旧版文档目录」；CLAUDE.md、rule、skill、文档和源码注释里还写着 `.context/` 路径的指针逐行报「旧版路径」，目录改名后漏改的也查得出来
 
-升级后跑一次 `organize-context`，它会把每个作用域的 `.context/` 用 `git mv` 改名为 `context-docs/`，并改掉整个仓库里指向旧路径的指针，批准后执行。也可以手动改：
+升级后跑一次 `organize-context`，它会把每个作用域的 `.context/` 用 `git mv` 改名为 `context-docs/`，并改掉整个仓库里指向旧路径的指针，批准后执行。也可以手动改，在每个有 `.context/` 的目录（根目录，以及 `apps/web/` 这类子作用域）里执行：
 
 ```bash
 git mv .context context-docs
 ```
+
+同一个目录里已经有 `context-docs/` 时不要这样改：`git mv` 会把整个目录移进去，变成 `context-docs/.context/`。这时把 `.context/` 里的文件逐份 `git mv` 进 `context-docs/` 的对应位置，再删掉空的 `.context/`。
 
 改完在整个仓库 grep `.context/`，把注释、rule、CLAUDE.md、skill 和文档里的旧路径换成 `context-docs/`。
 
