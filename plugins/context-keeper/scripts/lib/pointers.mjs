@@ -1,5 +1,5 @@
-// 指向 .context/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
-// 指针一律写仓库根起的路径（`<作用域>/.context/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
+// 指向 _context/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
+// 指针一律写仓库根起的路径（`<作用域>/_context/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,8 +7,8 @@ import path from 'node:path';
 // ---------- 文件分类：哪些文件里的路径算指针 ----------
 
 export const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-export const DOC_RE = /(^|\/)\.context\/.+\.md$/; // 区分大小写：和 POINTER_RE 口径一致
-export const ENTRY_RE = /(^|\/)\.context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+export const DOC_RE = /(^|\/)_context\/.+\.md$/; // 区分大小写：和 POINTER_RE 口径一致
+export const ENTRY_RE = /(^|\/)_context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
 export const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 export const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
@@ -47,13 +47,13 @@ export function findRoot(file, base) {
 
 // ---------- 指针 ----------
 
-// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见.context/…"这种紧贴中文的写法也能认出来
-export const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*\.context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
+// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见_context/…"这种紧贴中文的写法也能认出来
+export const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*_context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
 
 // 一行里的指针原文（去重，去掉开头的 ./）
 export function pointersIn(line) {
   const out = [];
-  if (!line.includes('.context/')) return out;
+  if (!line.includes('_context/')) return out;
   for (const m of line.matchAll(POINTER_RE)) {
     const raw = m[1].replace(/^\.\//, '');
     if (!out.includes(raw)) out.push(raw);
@@ -61,8 +61,8 @@ export function pointersIn(line) {
   return out;
 }
 
-// 中文正文紧贴路径时（"见包/.context/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
-// 第一段至少留一个字符，免得退化成根作用域的 `.context/`。exists(p) 判断仓库根起的路径是否存在，都不存在时返回 null
+// 中文正文紧贴路径时（"见包/_context/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
+// 第一段至少留一个字符，免得退化成根作用域的 `_context/`。exists(p) 判断仓库根起的路径是否存在，都不存在时返回 null
 export function resolvePointer(raw, exists) {
   for (let q = raw; ; q = q.replace(/^[^\x00-\x7f]/u, '')) {
     if (exists(q)) return q;

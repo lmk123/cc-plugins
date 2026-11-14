@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse hook：要改的代码附近有指向 .context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
+// PreToolUse hook：要改的代码附近有指向 _context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
 // 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每处指针只拦一次，文档读过之后不再拦。
 // 主会话和每个子代理各算各的：子代理的 context 是独立的，主会话读过、被拦过都不代表它知道。
 // 主会话压缩上下文之后（SessionStart，source 为 compact）清掉主会话的状态：拦过、读过都重新算。
@@ -48,7 +48,7 @@ if (MARKDOWN_RE.test(file)) process.exit(0);
 // 文件不在它下面就不管
 const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
 if (!root) process.exit(0);
-if (/(^|[\\/])(\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
+if (/(^|[\\/])(_context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');
 let text;
@@ -249,11 +249,11 @@ if (!todo.length) process.exit(0);
 
 // ---------- 本会话读过哪些 ----------
 
-// 读过：Read / Edit / Write 过这个文件，或 Bash 里用 cat / head / tail 这类命令读过它（按 `.context/…` 部分认：
+// 读过：Read / Edit / Write 过这个文件，或 Bash 里用 cat / head / tail 这类命令读过它（按 `_context/…` 部分认：
 // cd 进子目录后 cat 时没有仓库根起的前缀），并且那次调用没报错——路径拼错、读失败的不算。
 // `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
-const tailOf = (p) => p.slice(p.lastIndexOf('.context/'));
+const tailOf = (p) => p.slice(p.lastIndexOf('_context/'));
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result

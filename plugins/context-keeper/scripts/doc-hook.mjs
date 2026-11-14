@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 改了 .context/ 里的项目文档之后，列出指到这份文档的行
+// PostToolUse hook：Write / Edit / MultiEdit 改了 _context/ 里的项目文档之后，列出指到这份文档的行
 // （领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码注释里的指针），提醒 Claude：文档里的结论变了，这些行里的重点要跟着改。
 // 这些行里的重点是从文档提炼的，文档改了它们不会自己变，而 Claude 看了重点多半不会再去读文档。
 // 只提醒，不阻断；没有任何一处指到的文档（比如刚新建的）不提醒。设环境变量 CONTEXT_KEEPER_DOC_HOOK=0 可关闭。

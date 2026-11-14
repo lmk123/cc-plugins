@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeRepo, guard, sessionStart, age, use, result, compact } from './helpers.mjs';
 
-const DOC = '.context/api/retry-policy.md';
+const DOC = '_context/api/retry-policy.md';
 const POINTER = `改重试次数前读 ${DOC}`;
 
 const repoWith = (files) => makeRepo({ [DOC]: '# 重试策略\n', ...files });
@@ -150,17 +150,17 @@ test('主会话和子代理各算各的', () => {
   assert.match(guard(t, { ...edit, agent: 'abc' }), /这个子代理/);
 });
 
-test('不拦：没有指针、指针失效、Markdown、.context/ 里的文件、环境变量关闭', () => {
+test('不拦：没有指针、指针失效、Markdown、_context/ 里的文件、环境变量关闭', () => {
   const t = repoWith({
     'src/retry.ts': RETRY_TS,
     'src/plain.ts': '// 普通注释\nconst A = 1;\n',
-    'src/broken.ts': '// 改 A 前读 .context/api/missing.md\nconst A = 1;\n',
+    'src/broken.ts': '// 改 A 前读 _context/api/missing.md\nconst A = 1;\n',
     'docs/a.md': `<!-- ${POINTER} -->\n正文\n`,
-    '.context/api/other.md': `# 另一份\n\n${POINTER}\n`,
+    '_context/api/other.md': `# 另一份\n\n${POINTER}\n`,
   });
   assert.equal(guard(t, { file: 'src/plain.ts', old: 'const A = 1;' }), null);
   assert.equal(guard(t, { file: 'src/broken.ts', old: 'const A = 1;' }), null);
   assert.equal(guard(t, { file: 'docs/a.md', old: '正文' }), null);
-  assert.equal(guard(t, { file: '.context/api/other.md', old: '# 另一份' }), null);
+  assert.equal(guard(t, { file: '_context/api/other.md', old: '# 另一份' }), null);
   assert.equal(guard(t, { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;', env: { CONTEXT_KEEPER_POINTER_HOOK: '0' } }), null);
 });

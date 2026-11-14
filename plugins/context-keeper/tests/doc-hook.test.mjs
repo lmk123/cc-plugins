@@ -5,11 +5,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { SCRIPTS, makeRepo, docHook, sessionStart } from './helpers.mjs';
 
-const DOC = '.context/api/retry-policy.md';
+const DOC = '_context/api/retry-policy.md';
 const REPO = {
   [DOC]: '# 重试策略\n',
-  '.context/api/gateway.md': `# 网关\n\n重试相关的见 ${DOC}\n`,
-  '.context/README.md': `# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 \`${DOC}\`\n`,
+  '_context/api/gateway.md': `# 网关\n\n重试相关的见 ${DOC}\n`,
+  '_context/README.md': `# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 \`${DOC}\`\n`,
   '.claude/rules/api/context-index.md': `---\npaths:\n  - "src/api/*.ts"\n---\n\n- 重试上限 3。改重试次数前读 \`${DOC}\`\n`,
   'src/api/retry.ts': `// 重试上限 3：网关会封 IP。改重试次数前读 ${DOC}\nexport const MAX_RETRY = 3;\n`,
   'README.md': `示例：\`${DOC}\`\n`,
@@ -17,8 +17,8 @@ const REPO = {
 
 test('改了文档之后列出指到它的行：文档入口、领域索引 rule、源码注释', () => {
   const msg = docHook(makeRepo(REPO), { file: DOC });
-  assert.match(msg, /刚改的 \.context\/api\/retry-policy\.md 被下面几处指到/);
-  assert.match(msg, /- \.context\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.match(msg, /刚改的 _context\/api\/retry-policy\.md 被下面几处指到/);
+  assert.match(msg, /- _context\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
   assert.match(msg, /- \.claude\/rules\/api\/context-index\.md:6 {2}- 重试上限 3/);
   assert.match(msg, /- src\/api\/retry\.ts:1 {2}\/\/ 重试上限 3/);
 });
@@ -41,16 +41,16 @@ test('Markdown 代码块里的示例、源码字符串里的路径不列', () =>
 });
 
 test('没有任何一处指到的文档、文档入口、不是文档的文件不提醒', () => {
-  const t = makeRepo({ ...REPO, '.context/api/unused.md': '# 没人指\n' });
-  assert.equal(docHook(t, { file: '.context/api/unused.md', tool: 'Write' }), null);
-  assert.equal(docHook(t, { file: '.context/README.md' }), null);
+  const t = makeRepo({ ...REPO, '_context/api/unused.md': '# 没人指\n' });
+  assert.equal(docHook(t, { file: '_context/api/unused.md', tool: 'Write' }), null);
+  assert.equal(docHook(t, { file: '_context/README.md' }), null);
   assert.equal(docHook(t, { file: 'src/api/retry.ts' }), null);
 });
 
 test('另一个作用域里同名的文档不算指到它', () => {
   const t = makeRepo({
     [DOC]: '# 重试策略\n',
-    'apps/web/.context/api/retry-policy.md': '# web 包的重试策略\n',
+    'apps/web/_context/api/retry-policy.md': '# web 包的重试策略\n',
     'apps/web/src/retry.ts': `// 重试上限 5。改重试次数前读 apps/web/${DOC}\nexport const MAX_RETRY = 5;\n`,
   });
   assert.equal(docHook(t, { file: DOC }), null);
@@ -72,7 +72,7 @@ test('同一会话里同一份文档：清单只给一次，之后清单没变�
   const t = makeRepo(REPO);
   assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
   const again = docHook(t, { file: DOC, session: 's1' });
-  assert.match(again, /又改了 \.context\/api\/retry-policy\.md：指到它的 3 处/);
+  assert.match(again, /又改了 _context\/api\/retry-policy\.md：指到它的 3 处/);
   assert.equal(again.split('\n').length, 1);
   // 另一个会话、同一会话里的子代理各算各的：它们的 context 里没有那份清单
   assert.match(docHook(t, { file: DOC, session: 's2' }), /被下面几处指到/);
@@ -89,7 +89,7 @@ test('清单变了、主会话压缩上下文之后重新给完整清单', () =>
   assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
 });
 
-// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没提到 .context 就不起 node。这段只有真跑一遍才测得到
+// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没提到 _context 就不起 node。这段只有真跑一遍才测得到
 test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录的 payload 不出声', { skip: process.platform === 'win32' }, () => {
   const plugin = path.join(SCRIPTS, '..');
   const hooks = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;

@@ -40,15 +40,16 @@ test('TRIGGER_RE 不把话题式的指针当成写了触发条件', () => {
 });
 
 test('pointersIn 取出一行里的指针', () => {
-  assert.deepEqual(pointersIn('// 改 X 前读 apps/web/.context/api/retry-policy.md（经过）'), ['apps/web/.context/api/retry-policy.md']);
-  assert.deepEqual(pointersIn('详见.context/a.md 和 ./.context/b/c-d.md'), ['.context/a.md', '.context/b/c-d.md']);
-  assert.deepEqual(pointersIn('!.context/**/*.md'), []);
+  assert.deepEqual(pointersIn('// 改 X 前读 apps/web/_context/api/retry-policy.md（经过）'), ['apps/web/_context/api/retry-policy.md']);
+  assert.deepEqual(pointersIn('详见_context/a.md 和 ./_context/b/c-d.md'), ['_context/a.md', '_context/b/c-d.md']);
+  assert.deepEqual(pointersIn('!_context/**/*.md'), []);
+  assert.deepEqual(pointersIn('my_context/a.md 和 src/build_context/b.md'), []);
   assert.deepEqual(pointersIn('没有指针'), []);
 });
 
 test('resolvePointer 去掉紧贴在路径前面的中文', () => {
-  const exists = (p) => p === '包/.context/a.md' || p === 'apps/.context/b.md';
-  assert.equal(resolvePointer('见包/.context/a.md', exists), '包/.context/a.md');
-  assert.equal(resolvePointer('apps/.context/b.md', exists), 'apps/.context/b.md');
-  assert.equal(resolvePointer('apps/.context/missing.md', exists), null);
+  const exists = (p) => p === '包/_context/a.md' || p === 'apps/_context/b.md';
+  assert.equal(resolvePointer('见包/_context/a.md', exists), '包/_context/a.md');
+  assert.equal(resolvePointer('apps/_context/b.md', exists), 'apps/_context/b.md');
+  assert.equal(resolvePointer('apps/_context/missing.md', exists), null);
 });
