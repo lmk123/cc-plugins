@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { DOC_DIRS } from '../scripts/lib/pointers.mjs';
 import { SCRIPTS, makeRepo, docHook, sessionStart } from './helpers.mjs';
 
-const DOC = '.context/api/retry-policy.md';
+const DOC = 'context-docs/api/retry-policy.md';
 const REPO = {
   [DOC]: '# 重试策略\n',
-  '.context/api/gateway.md': `# 网关\n\n重试相关的见 ${DOC}\n`,
-  '.context/README.md': `# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 \`${DOC}\`\n`,
+  'context-docs/api/gateway.md': `# 网关\n\n重试相关的见 ${DOC}\n`,
+  'context-docs/README.md': `# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 \`${DOC}\`\n`,
   '.claude/rules/api/context-index.md': `---\npaths:\n  - "src/api/*.ts"\n---\n\n- 重试上限 3。改重试次数前读 \`${DOC}\`\n`,
   'src/api/retry.ts': `// 重试上限 3：网关会封 IP。改重试次数前读 ${DOC}\nexport const MAX_RETRY = 3;\n`,
   'README.md': `示例：\`${DOC}\`\n`,
@@ -17,8 +19,8 @@ const REPO = {
 
 test('改了文档之后列出指到它的行：文档入口、领域索引 rule、源码注释', () => {
   const msg = docHook(makeRepo(REPO), { file: DOC });
-  assert.match(msg, /刚改的 \.context\/api\/retry-policy\.md 被下面几处指到/);
-  assert.match(msg, /- \.context\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.match(msg, /刚改的 context-docs\/api\/retry-policy\.md 被下面几处指到/);
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
   assert.match(msg, /- \.claude\/rules\/api\/context-index\.md:6 {2}- 重试上限 3/);
   assert.match(msg, /- src\/api\/retry\.ts:1 {2}\/\/ 重试上限 3/);
 });
@@ -41,16 +43,16 @@ test('Markdown 代码块里的示例、源码字符串里的路径不列', () =>
 });
 
 test('没有任何一处指到的文档、文档入口、不是文档的文件不提醒', () => {
-  const t = makeRepo({ ...REPO, '.context/api/unused.md': '# 没人指\n' });
-  assert.equal(docHook(t, { file: '.context/api/unused.md', tool: 'Write' }), null);
-  assert.equal(docHook(t, { file: '.context/README.md' }), null);
+  const t = makeRepo({ ...REPO, 'context-docs/api/unused.md': '# 没人指\n' });
+  assert.equal(docHook(t, { file: 'context-docs/api/unused.md', tool: 'Write' }), null);
+  assert.equal(docHook(t, { file: 'context-docs/README.md' }), null);
   assert.equal(docHook(t, { file: 'src/api/retry.ts' }), null);
 });
 
 test('另一个作用域里同名的文档不算指到它', () => {
   const t = makeRepo({
     [DOC]: '# 重试策略\n',
-    'apps/web/.context/api/retry-policy.md': '# web 包的重试策略\n',
+    'apps/web/context-docs/api/retry-policy.md': '# web 包的重试策略\n',
     'apps/web/src/retry.ts': `// 重试上限 5。改重试次数前读 apps/web/${DOC}\nexport const MAX_RETRY = 5;\n`,
   });
   assert.equal(docHook(t, { file: DOC }), null);
@@ -72,7 +74,7 @@ test('同一会话里同一份文档：清单只给一次，之后清单没变�
   const t = makeRepo(REPO);
   assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
   const again = docHook(t, { file: DOC, session: 's1' });
-  assert.match(again, /又改了 \.context\/api\/retry-policy\.md：指到它的 3 处/);
+  assert.match(again, /又改了 context-docs\/api\/retry-policy\.md：指到它的 3 处/);
   assert.equal(again.split('\n').length, 1);
   // 另一个会话、同一会话里的子代理各算各的：它们的 context 里没有那份清单
   assert.match(docHook(t, { file: DOC, session: 's2' }), /被下面几处指到/);
@@ -89,7 +91,7 @@ test('清单变了、主会话压缩上下文之后重新给完整清单', () =>
   assert.match(docHook(t, { file: DOC, session: 's1' }), /被下面几处指到/);
 });
 
-// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没提到 .context 就不起 node。这段只有真跑一遍才测得到
+// hooks.json 里 doc-hook 前面有一段 shell 预筛：payload 里没有 `context-docs/`（Windows 上是 `context-docs\`）就不起 node。这段只有真跑一遍才测得到
 test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录的 payload 不出声', { skip: process.platform === 'win32' }, () => {
   const plugin = path.join(SCRIPTS, '..');
   const hooks = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;
@@ -107,4 +109,40 @@ test('hooks.json 里的命令：输入原样传给脚本，没提到文档目录
   const miss = run('src/api/retry.ts');
   assert.equal(miss.status, 0);
   assert.equal(miss.stdout, '');
+});
+
+// shell 预筛读不到 pointers.mjs 里的目录名，是另写的一遍：对着 DOC_DIRS 逐个查，改目录名时漏改 hooks.json 会在这里失败。
+// 换一个只打印标记的假 doc-hook.mjs，只看预筛放没放行；Windows 路径在 payload 里是 JSON 转义过的 `\\`
+test('hooks.json 里的预筛：每个文档目录的正斜杠和 Windows 路径都放行，别的路径不起 node', { skip: process.platform === 'win32' }, () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(SCRIPTS, '..', 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse;
+  const cmd = hooks.flatMap((h) => h.hooks).map((h) => h.command).find((c) => c.includes('doc-hook.mjs'));
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'ck-prefilter-'));
+  fs.mkdirSync(path.join(fake, 'scripts'));
+  fs.writeFileSync(path.join(fake, 'scripts', 'doc-hook.mjs'), "process.stdout.write('RAN');\n");
+  const ran = (file) => spawnSync('sh', ['-c', cmd], {
+    input: JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: file } }),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PLUGIN_ROOT: fake },
+  }).stdout === 'RAN';
+  try {
+    for (const dir of DOC_DIRS) {
+      assert.ok(ran(`/repo/${dir}/api/a.md`), dir);
+      assert.ok(ran(`C:\\repo\\${dir}\\api\\a.md`), `${dir}（Windows）`);
+    }
+    assert.ok(!ran('/repo/src/context/a.ts'));
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
+});
+
+test('改名前改了旧目录 .context/ 里的文档，照样列出指到它的行，并提示改名', () => {
+  const old = ['.context', 'api/retry-policy.md'].join('/');
+  const msg = docHook(makeRepo({
+    [old]: '# 重试策略\n',
+    [['.context', 'README.md'].join('/')]: `# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 \`${old}\`\n`,
+    'src/api/retry.ts': `// 重试上限 3：网关会封 IP。改重试次数前读 ${old}\nexport const MAX_RETRY = 3;\n`,
+  }), { file: old });
+  assert.match(msg, /- \.context\/README\.md:3/);
+  assert.match(msg, /- src\/api\/retry\.ts:1/);
+  assert.match(msg, /organize-context/);
 });

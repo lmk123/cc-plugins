@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeRepo, guard, sessionStart, age, use, result, compact } from './helpers.mjs';
 
-const DOC = '.context/api/retry-policy.md';
+const DOC = 'context-docs/api/retry-policy.md';
 const POINTER = `改重试次数前读 ${DOC}`;
 
 const repoWith = (files) => makeRepo({ [DOC]: '# 重试策略\n', ...files });
@@ -114,6 +114,23 @@ test('读过文档就不拦：Read 成功、Bash 里 cat 过', () => {
   assert.equal(guard(t, { ...edit, session: 'cat', transcript: [cat, result('t2')] }), null);
 });
 
+test('领域目录名以 context-docs 结尾时，读了别的同名文档不算读过这份', () => {
+  const doc = 'context-docs/user-context-docs/notes.md';
+  const t = makeRepo({ [doc]: '# 会话\n', 'context-docs/notes.md': '# 别的\n', 'src/s.ts': `// 改会话前读 ${doc}\nconst S = 1;\n` });
+  const edit = { file: 'src/s.ts', old: 'const S = 1;' };
+  const other = use('t1', 'Bash', { command: 'cat context-docs/notes.md' });
+  assert.ok(guard(t, { ...edit, session: 'other', transcript: [other, result('t1')] }));
+  const own = use('t2', 'Bash', { command: `cat ${doc}` });
+  assert.equal(guard(t, { ...edit, session: 'own', transcript: [own, result('t2')] }), null);
+});
+
+test('Bash 里用重定向读过也算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const cat = use('t1', 'Bash', { command: `head -20 <${DOC}` });
+  assert.equal(guard(t, { ...edit, session: 'redir', transcript: [cat, result('t1')] }), null);
+});
+
 test('不算读过：读失败、结果还没回来、Bash 里只是提到路径', () => {
   const t = repoWith({ 'src/retry.ts': RETRY_TS });
   const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
@@ -150,17 +167,49 @@ test('主会话和子代理各算各的', () => {
   assert.match(guard(t, { ...edit, agent: 'abc' }), /这个子代理/);
 });
 
-test('不拦：没有指针、指针失效、Markdown、.context/ 里的文件、环境变量关闭', () => {
+test('不拦：没有指针、指针失效、Markdown、context-docs/ 里的文件、环境变量关闭', () => {
   const t = repoWith({
     'src/retry.ts': RETRY_TS,
     'src/plain.ts': '// 普通注释\nconst A = 1;\n',
-    'src/broken.ts': '// 改 A 前读 .context/api/missing.md\nconst A = 1;\n',
+    'src/broken.ts': '// 改 A 前读 context-docs/api/missing.md\nconst A = 1;\n',
     'docs/a.md': `<!-- ${POINTER} -->\n正文\n`,
-    '.context/api/other.md': `# 另一份\n\n${POINTER}\n`,
+    'context-docs/api/other.md': `# 另一份\n\n${POINTER}\n`,
   });
   assert.equal(guard(t, { file: 'src/plain.ts', old: 'const A = 1;' }), null);
   assert.equal(guard(t, { file: 'src/broken.ts', old: 'const A = 1;' }), null);
   assert.equal(guard(t, { file: 'docs/a.md', old: '正文' }), null);
-  assert.equal(guard(t, { file: '.context/api/other.md', old: '# 另一份' }), null);
+  assert.equal(guard(t, { file: 'context-docs/api/other.md', old: '# 另一份' }), null);
   assert.equal(guard(t, { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;', env: { CONTEXT_KEEPER_POINTER_HOOK: '0' } }), null);
+});
+
+test('Bash 里读的路径只是以文档路径结尾、目录名不同的，不算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const other = use('t1', 'Bash', { command: `cat src/user-${DOC}` });
+  assert.ok(guard(t, { ...edit, session: 'suffix', transcript: [other, result('t1')] }));
+});
+
+test('Windows 路径（反斜杠）Read 过文档也算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const read = use('t1', 'Read', { file_path: path.join(t.repo, DOC).split('/').join('\\') });
+  assert.equal(guard(t, { ...edit, session: 'win', transcript: [read, result('t1')] }), null);
+});
+
+test('Windows 路径（反斜杠）Bash 里 cat 过文档也算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const cat = use('t1', 'Bash', { command: `cat ${DOC.split('/').join('\\')}` });
+  assert.equal(guard(t, { ...edit, session: 'win-bash', transcript: [cat, result('t1')] }), null);
+});
+
+test('改名前的旧目录 .context/ 里的指针照样拦，并提示改名', () => {
+  const old = ['.context', 'api/retry-policy.md'].join('/');
+  const t = makeRepo({ [old]: '# 重试策略\n', 'src/r.ts': `// 改重试次数前读 ${old}\nconst R = 3;\n` });
+  const edit = { file: 'src/r.ts', old: 'const R = 3;' };
+  const msg = guard(t, edit);
+  assert.match(msg, /src\/r\.ts:1/);
+  assert.match(msg, /organize-context/);
+  const read = use('t1', 'Read', { file_path: path.join(t.repo, old) });
+  assert.equal(guard(t, { ...edit, session: 'read-old', transcript: [read, result('t1')] }), null);
 });

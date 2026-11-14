@@ -45,7 +45,7 @@ const MAX_RETRY = 3;
 改造后：
 
 ```ts
-// 重试上限 3：网关连续 5 次失败会封 IP 10 分钟。改重试次数或退避前读 apps/web/.context/api/retry-policy.md（事故经过、试过的熔断方案）
+// 重试上限 3：网关连续 5 次失败会封 IP 10 分钟。改重试次数或退避前读 apps/web/context-docs/api/retry-policy.md（事故经过、试过的熔断方案）
 const MAX_RETRY = 3;
 ```
 
@@ -77,7 +77,7 @@ paths:
   - "apps/web/src/generated/db/*.ts"
 ---
 
-改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型，生成物不能手改。要改生成逻辑或排查类型对不上时读 .context/db/generated-types.md（生成流程、试过的方案）
+改 schema 后必须跑 `pnpm db:generate` 重新生成 apps/web 的类型，生成物不能手改。要改生成逻辑或排查类型对不上时读 context-docs/db/generated-types.md（生成流程、试过的方案）
 ```
 
 ## 领域索引 rule
@@ -92,9 +92,9 @@ paths:
 ---
 
 api 相关的项目文档。每行前半句是重点，细节按需读：
-- 网关单 IP 每秒 50 次，连续 5 次失败封 IP 10 分钟。改请求频率、重试、超时前读 `apps/web/.context/api/upstream-gateway.md`（封禁的计算口径、各接口实测延迟）
-- 401 只刷新一次 token，并发的请求等同一次刷新，不各刷各的。改登录态刷新、401 处理前读 `.context/auth-session-flow.md`（时序、试过的方案）
-- 新增或改动错误码映射前读 `apps/web/.context/api/error-codes.md`（各错误码的来源和含义）
+- 网关单 IP 每秒 50 次，连续 5 次失败封 IP 10 分钟。改请求频率、重试、超时前读 `apps/web/context-docs/api/upstream-gateway.md`（封禁的计算口径、各接口实测延迟）
+- 401 只刷新一次 token，并发的请求等同一次刷新，不各刷各的。改登录态刷新、401 处理前读 `context-docs/auth-session-flow.md`（时序、试过的方案）
+- 新增或改动错误码映射前读 `apps/web/context-docs/api/error-codes.md`（各错误码的来源和含义）
 ```
 
 每份文档一行：重点 + 什么时候读 + 仓库根起的路径。
@@ -106,15 +106,15 @@ api 相关的项目文档。每行前半句是重点，细节按需读：
 
 ## 文档入口
 
-给**挂不到代码上**的文档用（评估过但没做的需求、外部系统限制、还没有代码的决定）。每个有这类文档的作用域一个，固定为 `<作用域>/.context/README.md`，并由根 CLAUDE.md 指过来（见「CLAUDE.md 索引小节」）。文件 `apps/web/.context/README.md`：
+给**挂不到代码上**的文档用（评估过但没做的需求、外部系统限制、还没有代码的决定）。每个有这类文档的作用域一个，固定为 `<作用域>/context-docs/README.md`，并由根 CLAUDE.md 指过来（见「CLAUDE.md 索引小节」）。文件 `apps/web/context-docs/README.md`：
 
 ```markdown
 # 项目文档入口
 
 挂不到具体代码上的项目文档。做新需求、评估方案前，先看有没有相关的。每行前半句是结论，细节按需读：
-- 分期付款 2026-08 评估过，没做：现用的支付渠道只对企业商户开放分期接口。要做分期付款、或评估换支付渠道前读 `apps/web/.context/payment/installments.md`（什么条件变了值得重新评估）
-- 现用的 SSO 服务商最多配 5 个回调域名。接入新的登录方式前读 `apps/web/.context/sso-provider-limits.md`（已用几个、各配给了谁）
-- 安装包上限 50MB。新功能要引入依赖、二进制或大资源时读 `apps/web/.context/build/package-size.md`（当前体积、各依赖占多少、历次实测）
+- 分期付款 2026-08 评估过，没做：现用的支付渠道只对企业商户开放分期接口。要做分期付款、或评估换支付渠道前读 `apps/web/context-docs/payment/installments.md`（什么条件变了值得重新评估）
+- 现用的 SSO 服务商最多配 5 个回调域名。接入新的登录方式前读 `apps/web/context-docs/sso-provider-limits.md`（已用几个、各配给了谁）
+- 安装包上限 50MB。新功能要引入依赖、二进制或大资源时读 `apps/web/context-docs/build/package-size.md`（当前体积、各依赖占多少、历次实测）
 
 只在改代码时才用得上的文档由各领域的 `.claude/rules/<领域>/context-index.md` 在碰到相关代码时带出来，不在这里列。
 ```
@@ -139,7 +139,7 @@ api 相关的项目文档。每行前半句是重点，细节按需读：
   | 2026-09-20 | 引入路由级懒加载后 | 1.1s | Lighthouse 移动端 |
   ```
 
-能挂到代码上的长背景，示例文件 `apps/web/.context/api/upstream-gateway.md`（登记进 `api` 的领域索引 rule）：
+能挂到代码上的长背景，示例文件 `apps/web/context-docs/api/upstream-gateway.md`（登记进 `api` 的领域索引 rule）：
 
 ```markdown
 # 上游网关的限制
@@ -158,7 +158,7 @@ api 相关的项目文档。每行前半句是重点，细节按需读：
 | 2026-10-03 | /orders | 210ms | 线上 APM 7 天数据（网关升级后） |
 ```
 
-挂不到代码上的，示例文件 `apps/web/.context/payment/installments.md`（登记进 `apps/web/.context/README.md`）：
+挂不到代码上的，示例文件 `apps/web/context-docs/payment/installments.md`（登记进 `apps/web/context-docs/README.md`）：
 
 ```markdown
 # 分期付款
@@ -193,12 +193,12 @@ description 要写清"什么时候用"，它是启动时唯一常驻的部分。
 ```markdown
 ## 更多上下文
 - 各包和各模块的专属约定、背景会按路径通过 rule 自动加载，不用手动查
-- 做新需求、评估方案前，先看 `.context/README.md` 和 `apps/web/.context/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
-- 记下读代码看不出来的项目知识（原因、踩坑、实测数字、外部约束）：只涉及一个文件的写成紧贴代码的短注释，几个文件共用的写进 `.claude/rules/`；经过、数字等扩展内容和挂不到代码上的写进 `.context/`，原处留「重点 + 什么时候读 + 路径」（装了 context-keeper 插件就用 `record-context`）。不写成长注释，也不只记在自动记忆里；改动让已有注释、rule 或 `.context/` 文档里的说法不再成立时，同一次改动里改掉
+- 做新需求、评估方案前，先看 `context-docs/README.md` 和 `apps/web/context-docs/README.md`：评估过但没做的需求、外部系统限制、还没有代码的决定
+- 记下读代码看不出来的项目知识（原因、踩坑、实测数字、外部约束）：只涉及一个文件的写成紧贴代码的短注释，几个文件共用的写进 `.claude/rules/`；经过、数字等扩展内容和挂不到代码上的写进 `context-docs/`，原处留「重点 + 什么时候读 + 路径」（装了 context-keeper 插件就用 `record-context`）。不写成长注释，也不只记在自动记忆里；改动让已有注释、rule 或 `context-docs/` 文档里的说法不再成立时，同一次改动里改掉
 - 发布流程：用 `/release`
 ```
 
-- 第二行（文档入口）列出**所有作用域**里存在的 `.context/README.md`，没有任何入口时省掉这一行。
+- 第二行（文档入口）列出**所有作用域**里存在的 `context-docs/README.md`，没有任何入口时省掉这一行。
 - 第三行是常驻的写入约定，**不要省**：没有它，Claude 会按默认习惯把背景写进注释或自动记忆。
 - 单仓库去掉"各包"的说法。
 - 索引里只列根作用域的 skill：包内 skill 要碰到该包的文件后才可用，名字也带目录前缀，写进根索引会指向一个调不到的命令。

@@ -52,7 +52,7 @@ claude plugin marketplace update lmk123
 
 | 插件 | 说明 |
 | --- | --- |
-| [context-keeper](plugins/context-keeper) | 整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，单个文件的知识写成紧贴代码的短注释，多个文件共用的写成 rule，扩展内容进 .context/ 并在原处留指针按需读；兼容 monorepo 与单仓库 |
+| [context-keeper](plugins/context-keeper) | 整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，单个文件的知识写成紧贴代码的短注释，多个文件共用的写成 rule，扩展内容进 context-docs/ 并在原处留指针按需读；兼容 monorepo 与单仓库 |
 
 ## 目录结构
 
