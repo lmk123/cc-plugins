@@ -16,7 +16,7 @@ import { langFor } from './lib/comments.mjs';
 import {
   ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
   commentLines, escapeLinkPath, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, pointersIn, proseLines, resolvePointer,
-  splitLine,
+  rootPathOf, splitLine,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -87,11 +87,14 @@ for (const f of [...candidates].sort()) {
   const defs = isMd ? linkDefs(text) : null;
   for (const [line, i] of proseLines(text, !isMd)) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
-    // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析。引用式链接列用到它的那一行（重点写在那里），不列定义行
+    // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析。引用式链接列用到它的那一行（重点写在那里），不列定义行。
+    // 链接目标写成仓库根起的路径、按所在目录指不到文件的（0.8.0 整理时改出来的写法，check.mjs 报错）也列：那一行的重点照样是从这份文档提炼的
     const { links, scan } = splitLine(f, line, defs);
-    const hit = pointersIn(scan, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc)
-      || links.some((l) => !l.def && l.resolved === doc);
-    if (!hit || (!isMd && !inComment(line, i, comment, hit))) continue;
+    const raw = pointersIn(scan, ANY_POINTER_RE).find((x) => resolvePointer(x, exists) === doc);
+    const linked = links.some((l) => !l.def
+      && (l.resolved === doc || ((!l.resolved || !exists(l.resolved)) && rootPathOf(l.target) === doc)));
+    // 链接只在 Markdown 里认，源码看纯文本指针是不是写在注释里
+    if (isMd ? !raw && !linked : !raw || !inComment(line, i, comment, raw)) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
     const t = line.trim();
     rows.push(`- ${f}:${i + 1}  ${t.length > 200 ? `${t.slice(0, 200)}…` : t}`);

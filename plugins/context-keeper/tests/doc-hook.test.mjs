@@ -157,6 +157,14 @@ test('相对链接指到这份文档的也列出来，解析到别处的同名�
   assert.doesNotMatch(msg, /README\.md:4/);
 });
 
+test('链接目标写成仓库根起的路径的（0.8.0 整理出来的写法）也列出来', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'apps/m/CLAUDE.md': '# m\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](context-docs/api/retry-policy.md)\n',
+  }), { file: DOC });
+  assert.match(msg, /- apps\/m\/CLAUDE\.md:3 {2}- 网关连续 5 次失败封 IP/);
+});
+
 test('引用式链接列出用到它的那一行，不列定义行', () => {
   const msg = docHook(makeRepo({
     ...REPO,

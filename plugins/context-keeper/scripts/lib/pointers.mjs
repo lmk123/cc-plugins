@@ -32,13 +32,16 @@ export const isPointerMarkdown = (f) => RULE_RE.test(f) || ENTRY_RE.test(f) || C
 
 // Markdown 代码块外的行，返回 [[line, i]]，i 为 0 起的行下标，围栏行本身不返回。plain 为 true 时（源码）不认代码块。
 // 缩进代码块也不返回：空行之后缩进 4 格以上（在列表项里从列表项内容的缩进算起）的行，到缩进不够的行为止。
-// 列表项里缩进的续行（含缩进的引用式定义）不算代码块
+// 列表项里缩进的续行（含缩进的引用式定义）不算代码块。列表可以嵌套，按层记每一层内容的缩进：
+// 空行之后缩进不够某一层的、新的列表项、标题、引言、围栏和分隔线（不空行直接接在列表后面也一样）都退出到够得着的那一层；
+// 不空行接着写的普通文字是上一段的续行，层次不变
 const LIST_MARK_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
+const BLOCK_START_RE = /^[ \t]*(?:#{1,6}(?:[ \t]|$)|>|```|~~~|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
 const widthOf = (s) => s.replace(/\t/g, '    ').length;
 export function proseLines(text, plain = false) {
   const out = [];
   let fence = false;
-  let list = null; // 所在列表项内容的缩进，不在列表里为 null
+  const lists = []; // 所在的各层列表项内容的缩进，外层在前
   let blank = true; // 上一行是空行（或文件开头）
   let code = false; // 上一行是缩进代码块
   text.split(/\r?\n/).forEach((line, i) => {
@@ -46,11 +49,11 @@ export function proseLines(text, plain = false) {
     if (!fence) {
       if (!line.trim()) { blank = true; out.push([line, i]); return; }
       const indent = widthOf(line.match(/^[ \t]*/)[0]);
-      if ((blank || code) && indent >= (list ?? 0) + 4) { code = true; blank = false; return; }
-      code = false;
       const m = line.match(LIST_MARK_RE);
-      if (m) list = widthOf(m[0]);
-      else if (blank && indent < (list ?? 0)) list = null; // 空行之后缩进不够，离开了列表
+      if (blank || m || BLOCK_START_RE.test(line)) while (lists.length && lists[lists.length - 1] > indent) lists.pop();
+      if ((blank || code) && indent >= (lists[lists.length - 1] ?? 0) + 4) { code = true; blank = false; return; }
+      code = false;
+      if (m) lists.push(widthOf(m[0]));
       blank = false;
     }
     if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
@@ -125,8 +128,9 @@ export function linkDefs(text) {
   return defs;
 }
 
-// 一行里的 Markdown 链接，按出现的顺序：[{ text, target, index, at, def?, ref? }]。index 是链接（`[`）在行里的位置，
-// at 是目标在行里的位置。def 是引用式定义行；ref 是引用式用法，目标取自 defs（linkDefs 的结果），不在这一行里，at 为 -1
+// 一行里的 Markdown 链接，按出现的顺序：[{ text, target, index, at, end, def?, ref? }]。index 是链接（`[`）在行里的位置，
+// at 是目标在行里的位置，end 是目标连同后面的标题（`"标题"`）结束的位置。
+// def 是引用式定义行；ref 是引用式用法，目标取自 defs（linkDefs 的结果），不在这一行里，at、end 为 -1
 export function linksIn(line, defs) {
   const refs = defs && defs.size > 0;
   if (!line.includes('](') && !line.includes(']:') && !(refs && line.includes(']'))) return [];
@@ -135,26 +139,26 @@ export function linksIn(line, defs) {
   let rest = masked; // 认过的行内链接抹掉，剩下的再找引用式用法
   for (const m of masked.matchAll(INLINE_LINK_RE)) {
     const at = m.index + m[0].indexOf(m[2], m[1].length + 3); // 跳过 `[文字](`
-    out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target: line.slice(at, at + m[2].length), index: m.index, at });
+    out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target: line.slice(at, at + m[2].length), index: m.index, at, end: m.index + m[0].length - 1 });
     rest = rest.slice(0, m.index) + ' '.repeat(m[0].length) + rest.slice(m.index + m[0].length);
   }
   const d = masked.match(LINK_DEF_RE);
   if (d) {
-    out.push({ text: '', target: line.slice(d[1].length, d[1].length + d[3].length), index: line.search(/\S/), at: d[1].length, def: true });
+    out.push({ text: '', target: line.slice(d[1].length, d[1].length + d[3].length), index: line.search(/\S/), at: d[1].length, end: line.length, def: true });
   } else if (refs) {
     for (const m of rest.matchAll(REF_LINK_RE)) {
       const target = defs.get(refKey(m[2] || m[1]));
-      if (target !== undefined) out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target, index: m.index, at: -1, ref: true });
+      if (target !== undefined) out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target, index: m.index, at: -1, end: -1, ref: true });
     }
   }
   return out.sort((a, b) => a.index - b.index);
 }
 
-// 把一行里的链接目标抹成空格（长度不变，下标照旧），纯文本指针的正则就不会把链接目标当成仓库根起的路径。
+// 把一行里的链接目标连同标题抹成空格（长度不变，下标照旧），纯文本指针的正则就不会把链接目标、标题里的路径当成仓库根起的路径。
 // links 是这一行已经解析好的链接，不传时现解析
 export function maskLinkTargets(line, links = linksIn(line)) {
   let out = line;
-  for (const l of links) if (l.at >= 0) out = out.slice(0, l.at) + ' '.repeat(l.target.length) + out.slice(l.at + l.target.length);
+  for (const l of links) if (l.at >= 0) out = out.slice(0, l.at) + ' '.repeat(l.end - l.at) + out.slice(l.end);
   return out;
 }
 
@@ -178,6 +182,14 @@ export function resolveLink(file, target) {
   if (t === null) return null;
   const p = t.startsWith('/') ? path.posix.normalize(t.slice(1)) : path.posix.join(path.posix.dirname(file), t);
   return !p || p === '.' || p.startsWith('../') || p === '..' ? null : p;
+}
+
+// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）时，按仓库根解析出来的路径。
+// `/` 开头的本来就按仓库根解析；`./`、`../` 开头的是照着所在文件写的相对路径，只是写错了，不按仓库根猜。不是这种写法的返回 null。
+// check.mjs 报错并给改法、doc-hook 把这种写错的链接也列出来，都用它
+export function rootPathOf(target) {
+  const t = linkPath(target);
+  return t && !/^(?:\/|\.\.?\/)/.test(t) ? resolveLink('', target) : null;
 }
 
 // 一行拆成链接和抹掉链接目标后的行（scan）：纯文本指针在 scan 上找，按仓库根解析；链接目标按 file 的目录解析，记在 resolved 上。

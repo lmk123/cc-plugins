@@ -16,7 +16,7 @@ import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
   CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
   commentLines, escapeLinkPath, inComment, isDocLink, linkDefs, linkPath, pointersIn, proseLines,
-  resolvePointer as resolveWith, segmentIndex, splitLine, TRIGGER_RE,
+  resolvePointer as resolveWith, rootPathOf, segmentIndex, splitLine, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
@@ -547,14 +547,6 @@ function lineParser(f, defs) {
 }
 // 一行里有没有指向文档的指针：纯文本的或链接。parsed 是 lineParser 的结果
 const hasPointer = (parsed) => parsed.found.length > 0 || parsed.docLinks.length > 0;
-// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）时，按仓库根解析出来的路径。
-// `/` 开头的本来就按仓库根解析；`./`、`../` 开头的是照着所在文件写的相对路径，只是写错了，不按仓库根猜。不是这种写法的返回 null
-function rootPathOf(target) {
-  const t = linkPath(target);
-  if (!t || /^(?:\/|\.\.?\/)/.test(t)) return null;
-  const p = path.posix.normalize(t);
-  return p === '..' || p.startsWith('../') ? null : p;
-}
 // 仓库根起的路径 p 在文件 f 里该写成的链接目标：所在文件起的相对路径。原目标的 `#锚点`、`?查询` 和尖括号照留；
 // 路径是 linkPath 解码后的字，空格、`)`、`#` 这类原样写回去会弄断链接，用 escapeLinkPath 转义回去
 function relTarget(f, p, target) {
@@ -563,11 +555,11 @@ function relTarget(f, p, target) {
   const fixed = escapeLinkPath(path.posix.relative(path.posix.dirname(f), p)) + (raw.match(/[#?].*$/)?.[0] ?? '');
   return angled ? `<${fixed}>` : fixed;
 }
-// 写成仓库根起的路径、按仓库根找得到文档的链接目标，给出改好的相对路径。
-// 按仓库根找到的不是文档（碰巧有个同名的普通文件）时不给：多半是相对链接指的文档没了，不该改去指那个文件
-function linkFix(f, target) {
+// 写成仓库根起的路径、按仓库根找得到文档的链接目标，返回那份文档（仓库根起的路径），不是这种的返回 null。
+// 按仓库根找到的不是文档（碰巧有个同名的普通文件）时不算：多半是相对链接指的文档没了，不该改去指那个文件
+function rootDocOf(target) {
   const p = rootPathOf(target);
-  return p && DOC_RE.test(p) && pointerExists(p) ? relTarget(f, p, target) : null;
+  return p && DOC_RE.test(p) && pointerExists(p) ? p : null;
 }
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
@@ -596,13 +588,13 @@ const legacyLinksIn = (f, links) => links.flatMap((l) => {
   if (l.ref) return [];
   const t = linkPath(l.target);
   if (t === null || segmentIndex(t.replace(/^\//, ''), LEGACY_MARK) === -1 || !MARKDOWN_RE.test(t)) return [];
-  const found = (p) => p && (pointerExists(toNewDir(p)) || pointerExists(p));
-  const rel = l.resolved;
-  const root = found(rel) ? null : rootPathOf(l.target);
-  const p = found(rel) ? rel : found(root) ? root : null;
+  const renamed = (p) => (p && pointerExists(toNewDir(p)) ? toNewDir(p) : null); // 改名后的文档，存在时
+  const at = (p) => (p && (renamed(p) || pointerExists(p)) ? p : null); // 改名前后有一个在就算找到
+  const rel = at(l.resolved);
+  const p = rel ?? at(rootPathOf(l.target));
   if (!p) return [{ raw: l.target, fixed: null, doc: null, link: true }];
-  const doc = pointerExists(toNewDir(p)) ? toNewDir(p) : null;
-  return [{ raw: l.target, fixed: p === rel ? toNewDirTarget(l.target) : relTarget(f, toNewDir(p), l.target), doc, link: true }];
+  // 按所在目录找到的只换目录名；按仓库根找到的直接给所在文件起的相对路径
+  return [{ raw: l.target, fixed: rel ? toNewDirTarget(l.target) : relTarget(f, toNewDir(p), l.target), doc: renamed(p), link: true }];
 });
 // 旧版路径的提示：改名前 hook 照样认旧路径，但目录一改名旧路径就指不到文件了，hook 也跟着认不出来
 const legacyPointerMsg = (legacy) => {
@@ -768,10 +760,12 @@ for (const f of filesMentioningContext()) {
         }
         continue;
       }
+      // 写成仓库根起的路径的，按仓库根找得到的那份文档照样登记：同一份文档不再另报孤儿、缺索引，只报下面这条写法错误
+      const doc = rootDocOf(l.target);
+      if (doc) register(doc);
       if (!strict || l.ref) continue; // 引用式用法的目标失效在定义行报，不在每个用到它的地方重复报
-      const fix = linkFix(f, l.target);
-      add('error', 'pointer', f, fix
-        ? `链接目标 ${l.target} 写成了仓库根起的路径：Markdown 链接按所在文件的目录解析，现在点开是 404。改成 ${fix}`
+      add('error', 'pointer', f, doc
+        ? `链接目标 ${l.target} 写成了仓库根起的路径：Markdown 链接按所在文件的目录解析，现在点开是 404。改成 ${relTarget(f, doc, l.target)}`
         : `链接指向不存在的文件 ${l.target}（Markdown 链接的目标按所在文件的目录解析，开头是 / 的按仓库根解析）`, i + 1);
     }
   });

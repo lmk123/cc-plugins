@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ANY_POINTER_RE, LEGACY_POINTER_RE, escapeLinkPath, isDocLink, lastSegmentIndex, linkDefs, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines,
-  resolveLink, resolvePointer, segmentIndex, splitLine, TRIGGER_RE,
+  resolveLink, resolvePointer, rootPathOf, segmentIndex, splitLine, TRIGGER_RE,
 } from '../scripts/lib/pointers.mjs';
 
 // 传给 TRIGGER_RE 的是去掉指针路径之后的那一行
@@ -92,6 +92,19 @@ test('maskLinkTargets 抹掉链接目标、长度不变，链接文字里的路�
   assert.match(masked.slice(masked.indexOf('](')), /^\]\( +\)$/);
 });
 
+test('splitLine 连同链接标题一起抹掉，标题里的路径不当纯文本指针', () => {
+  const { scan } = splitLine('apps/m/CLAUDE.md', '[a](x.md "context-docs/b.md") 和 context-docs/c.md', new Map());
+  assert.deepEqual(pointersIn(scan), ['context-docs/c.md']);
+  const defs = linkDefs('[r]: x.md "context-docs/b.md"\n');
+  assert.deepEqual(pointersIn(splitLine('CLAUDE.md', '[r]: x.md "context-docs/b.md"', defs).scan), []);
+});
+
+test('rootPathOf：不以 /、./、../ 开头的链接目标按仓库根解析，跑出仓库的返回 null', () => {
+  assert.equal(rootPathOf('apps/m/context-docs/a.md#节'), 'apps/m/context-docs/a.md');
+  assert.equal(rootPathOf('a/../b.md'), 'b.md');
+  for (const t of ['/a.md', './a.md', '../a.md', 'a/../../b.md', 'https://x.com/a.md', '#节']) assert.equal(rootPathOf(t), null, t);
+});
+
 test('resolveLink 按所在文件的目录解析，开头是 / 的按仓库根，外链和纯锚点不解析', () => {
   const f = 'apps/m/context-docs/models/a.md';
   assert.equal(resolveLink(f, '../targets/k.md'), 'apps/m/context-docs/targets/k.md');
@@ -144,6 +157,10 @@ test('proseLines 跳过缩进代码块，列表项里缩进的续行不算代码
   assert.deepEqual(idx('- 列表\n\n    [m]: ../x.md\n\n      代码'), [0, 2]);
   // 空行之后缩进不够、不是列表项的，离开了列表
   assert.deepEqual(idx('- 列表\n\n正文\n\n    代码'), [0, 2]);
+  // 嵌套列表之后空一行回到父项：父项的段落按父项内容的缩进算，缩进 4 格还是段落
+  assert.deepEqual(idx('- 父项\n  - 子项\n\n  父项第二段\n\n    父项第三段'), [0, 1, 3, 5]);
+  // 列表后面不空行直接接标题，列表结束：后面空行之后缩进 4 格的是代码块
+  assert.deepEqual(idx('- a\n# 标题\n\n    代码'), [0, 1]);
   // 源码不认代码块
   assert.deepEqual(proseLines('a\n\n    b', true).map(([, i]) => i), [0, 1, 2]);
 });

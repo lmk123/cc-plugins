@@ -456,6 +456,15 @@ test('链接目标写成仓库根起的路径报错误，给出改好的相对�
   assert.equal(r.status, 1);
 });
 
+test('链接目标写成仓库根起的路径时，按仓库根找得到的文档照样算登记，不另报孤儿、缺索引', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 新增渠道前读 [kiro](apps/m/context-docs/targets/kiro.md)\n`,
+  }));
+  assert.deepEqual(r.findings.map((x) => [x.file, x.level]), [['context-docs/README.md', 'error']], JSON.stringify(r.findings));
+  assert.match(r.findings[0].msg, /改成 \.\.\/apps\/m\/context-docs\/targets\/kiro\.md/);
+});
+
 test('不带目录名的相对链接断了也报', () => {
   const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0040](../targets/gone.md)\n' }));
   assert.ok(has(r, 'pointer', /链接指向不存在的文件 \.\.\/targets\/gone\.md/));
