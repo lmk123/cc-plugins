@@ -165,3 +165,13 @@ test('引用式链接列出用到它的那一行，不列定义行', () => {
   assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
   assert.doesNotMatch(msg, /README\.md:5/);
 });
+
+test('URL 编码的相对链接也列出来', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/api/重试 策略.md': '# 重试\n',
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](api/%E9%87%8D%E8%AF%95%20%E7%AD%96%E7%95%A5.md)\n- 另一份：[空格](api/%e9%87%8d%e8%af%95%20%e7%ad%96%e7%95%a5.md)\n',
+  }), { file: 'context-docs/api/重试 策略.md' });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.match(msg, /- context-docs\/README\.md:4/);
+});

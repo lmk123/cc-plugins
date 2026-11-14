@@ -540,7 +540,7 @@ function lineParser(f, isMd, defs) {
     if (!p) {
       const links = isMd ? linksIn(line, defs) : [];
       const scan = links.length ? maskLinkTargets(line, links) : line;
-      const docLinks = links.map((l) => ({ ...l, resolved: resolveLink(f, l.target) })).filter((l) => isDocLink(l.resolved, l.target, [DOC_DIR]));
+      const docLinks = links.map((l) => ({ ...l, resolved: resolveLink(f, l.target) })).filter((l) => isDocLink(l.resolved, l.target));
       p = { links, scan, found: pointersIn(scan), docLinks };
       memo.set(line, p);
     }
@@ -550,16 +550,25 @@ function lineParser(f, isMd, defs) {
 // 一行里有没有指向文档的指针：纯文本的或链接。parsed 是 lineParser 的结果
 const hasPointer = (parsed) => parsed.found.length > 0 || parsed.docLinks.length > 0;
 // 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）：按仓库根找得到文件时，给出改好的相对路径。
-// 原目标的 `#锚点`、`?查询` 和尖括号照留，没有尖括号时空格写成 %20（linkPath 解码过），不然改出来的就不是链接了
+// `./`、`../` 开头的是照着所在文件写的相对路径，只是写错了，不按仓库根猜。
+// 原目标的 `#锚点`、`?查询` 和尖括号照留；路径里的各段照抄原目标的写法（%20、%29 这类转义原样保留），
+// 不用 linkPath 解码后的字：解码出来的空格、`)`、`%` 写回去，改出来的就不是链接了
+const escapeSeg = (s) => s.replace(/[%\s()<>]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 function linkFix(f, target) {
   const t = linkPath(target);
-  if (!t || t.startsWith('/')) return null;
+  if (!t || /^(?:\/|\.\.?\/)/.test(t)) return null;
   const p = path.posix.normalize(t);
   if (p === '..' || p.startsWith('../') || !pointerExists(p)) return null;
   const angled = target.startsWith('<');
-  const suffix = (angled ? target.slice(1, -1) : target).match(/[#?].*$/)?.[0] ?? '';
-  const rel = path.posix.relative(path.posix.dirname(f), p) + suffix;
-  return angled ? `<${rel}>` : rel.replace(/ /g, '%20');
+  const raw = angled ? target.slice(1, -1) : target;
+  const suffix = raw.match(/[#?].*$/)?.[0] ?? '';
+  const rel = path.posix.relative(path.posix.dirname(f), p).split('/');
+  const n = rel.length - rel.findIndex((s) => s !== '..'); // rel 末尾取自 p 的段数，前面都是 `..`
+  const rawSegs = path.posix.normalize(raw.slice(0, raw.length - suffix.length)).split('/');
+  // 原目标和解码后的段数对不上（转义了 `.` 之类）时，改用解码后的段重新转义
+  const tail = rawSegs.length === p.split('/').length ? rawSegs.slice(-n) : rel.slice(-n).map(escapeSeg);
+  const fixed = [...rel.slice(0, rel.length - n), ...tail].join('/') + suffix;
+  return angled ? `<${fixed}>` : fixed;
 }
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
@@ -625,8 +634,8 @@ function pathFirst(line, raw) {
   return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, line.indexOf(raw))))) && resolvePointer(raw) === raw;
 }
 // 链接打头的登记行同理：链接文字只是路径、文件名（`[x.md](…)`）或"文档"这类引导词时算路径打头；链接文字是标题时前面有话，不算。
-// 只去掉文字里的路径、文件名，"重试策略 retry-policy.md"这种标题加文件名的照样算有话
-const LINK_TEXT_PATH_RE = /[\w./-]*\.(?:md|mdx|markdown)(?![\w])/gi;
+// 只去掉文字里的路径、文件名（路径段可以是中文，和指针的口径一致），"重试策略 retry-policy.md"这种标题加文件名的照样算有话
+const LINK_TEXT_PATH_RE = /[\p{L}\p{N}_./-]*\.(?:md|mdx|markdown)(?![\p{L}\p{N}_])/giu;
 function linkFirst(line, link) {
   if (link.resolved && ENTRY_RE.test(link.resolved)) return false;
   const text = link.text.replace(/`/g, '').replace(LINK_TEXT_PATH_RE, '');
@@ -696,7 +705,15 @@ for (const f of filesMentioningContext()) {
     for (const x of legacy) if (x.fixed && pointerExists(x.fixed)) register(x.fixed);
     const legacyLinks = hasLegacy && isMd ? legacyLinksIn(f, allLinks) : [];
     for (const x of legacyLinks) if (x.doc) register(x.doc);
-    const stale = warnLegacy ? [...legacy.filter((x) => isMd || inComment(line, i, cm, x.raw)), ...legacyLinks] : [];
+    // 链接文字和链接目标写的是同一个旧路径时只列一次，取给得出新路径的那条
+    const stale = [];
+    if (warnLegacy) {
+      for (const x of [...legacy.filter((y) => isMd || inComment(line, i, cm, y.raw)), ...legacyLinks]) {
+        const k = stale.findIndex((y) => y.raw === x.raw);
+        if (k === -1) stale.push(x);
+        else if (!stale[k].fixed && x.fixed) stale[k] = x;
+      }
+    }
     if (stale.length) add('warn', 'pointer', f, legacyPointerMsg(stale), i + 1);
     if (!found.length && !links.length) return;
     // 引用式链接的定义行（`[id]: 目标`）只是目标，重点和什么时候读写在用到它的那一行，写法不查，只查目标在不在

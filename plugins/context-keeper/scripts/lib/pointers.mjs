@@ -88,10 +88,11 @@ export function pointersIn(line, re = POINTER_RE) {
 
 // 行内链接 `[文字](目标 "标题")`（文字里允许一层方括号，目标可以用尖括号包起来）、引用式定义 `[id]: 目标`
 // 和引用式用法 `[文字][id]`、`[id][]`、`[id]`（id 有定义时）。脚注定义 `[^1]: …` 后面是正文，不是链接目标。
+// 定义行不限缩进（列表项里的定义要缩进），免得被当成引用式用法。反斜杠转义的 `\[` 不是链接。
 // 行内代码里的是示例，先抹掉
-const INLINE_LINK_RE = /\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*(<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-const LINK_DEF_RE = /^(\s{0,3}\[(?!\^)([^\]]+)\]:[ \t]*)(<[^>\n]*>|\S+)/;
-const REF_LINK_RE = /\[((?:[^[\]]|\[[^\]]*\])*)\](?:\[([^\]]*)\])?/g;
+const INLINE_LINK_RE = /(?<!\\)\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*(<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+const LINK_DEF_RE = /^(\s*\[(?!\^)([^\]]+)\]:[ \t]*)(<[^>\n]*>|\S+)/;
+const REF_LINK_RE = /(?<!\\)\[((?:[^[\]]|\[[^\]]*\])*)\](?:\[([^\]]*)\])?/g;
 const maskCode = (line) => line.replace(/(`+)[^`]*?\1/g, (s) => ' '.repeat(s.length));
 const refKey = (s) => s.trim().replace(/\s+/g, ' ').toLowerCase(); // 引用 id 不分大小写，连续空白算一个
 
@@ -156,12 +157,14 @@ export function resolveLink(file, target) {
   return !p || p === '.' || p.startsWith('../') || p === '..' ? null : p;
 }
 
-// 链接是不是指向文档目录里的 Markdown（含旧目录）：解析出来的路径落在文档目录里，或者目标里写了文档目录名。
-// 后一种是为了认出解析到别处去的链接（把仓库根起的路径写进链接目标，在子目录的文件里就会解析错）。dirs 默认含旧目录
-export function isDocLink(resolved, target, dirs = DOC_DIRS) {
+// 链接是不是指向文档目录里的 Markdown：解析出来的路径落在文档目录里，或者目标里写了文档目录名。
+// 后一种是为了认出解析到别处去的链接（把仓库根起的路径写进链接目标，在子目录的文件里就会解析错）。
+// 只认新目录：写了旧目录的链接由 check.mjs 另报旧版路径
+export function isDocLink(resolved, target) {
   const t = linkPath(target);
   if (t === null || !MARKDOWN_RE.test(t)) return false;
-  return dirs.some((d) => (resolved !== null && segmentIndex(resolved, `${d}/`) !== -1) || segmentIndex(t.replace(/^\//, ''), `${d}/`) !== -1);
+  const mark = `${DOC_DIR}/`;
+  return (resolved !== null && segmentIndex(resolved, mark) !== -1) || segmentIndex(t.replace(/^\//, ''), mark) !== -1;
 }
 
 // 文档路径是不是在旧目录里

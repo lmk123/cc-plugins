@@ -552,3 +552,36 @@ test('链接目标里写了旧目录 .context/：目录已改名的报旧版路�
   }));
   assert.ok(notYet.findings.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/old.md → ../../context-docs/api/old.md')), JSON.stringify(notYet.findings));
 });
+
+test('改好的相对路径照抄原目标里的转义：%29、%25 不解码成会弄断链接的字', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/b).md': '# b\n',
+    'apps/m/context-docs/targets/c%d.md': '# c\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [b](apps/m/context-docs/targets/b%29.md) 和 [c](apps/m/context-docs/targets/c%25d.md)\n',
+  }));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/b%29\.md$/), JSON.stringify(r.findings));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/c%25d\.md$/), JSON.stringify(r.findings));
+});
+
+test('./ 开头的失效链接是照着所在文件写的相对路径，不当成仓库根起的路径给改法', () => {
+  const r = check(makeRepo({ ...LINKED, 'apps/m/CLAUDE.md': '# m\n\n- 改重试次数前读 [重试](./context-docs/api/retry-policy.md)\n' }));
+  const f = r.findings.find((x) => x.file === 'apps/m/CLAUDE.md' && x.level === 'error');
+  assert.ok(f && /链接指向不存在的文件 \.\/context-docs\/api\/retry-policy\.md/.test(f.msg), JSON.stringify(r.findings));
+});
+
+test('链接文字和目标写的是同一个旧路径时只列一次', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'CLAUDE.md': `${CLEAN['CLAUDE.md']}- 重试上限 3 次。改重试次数前读 [.context/api/retry-policy.md](.context/api/retry-policy.md)\n`,
+  }));
+  const f = r.findings.find((x) => x.file === 'CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f, JSON.stringify(r.findings));
+  assert.equal(f.msg.split('.context/api/retry-policy.md → ').length, 2, f.msg);
+});
+
+test('链接文字是带中文路径段的路径时也算路径打头', () => {
+  assert.deepEqual(bareLinesOf([
+    '- [context-docs/接口/retry-policy.md](../../../context-docs/接口/retry-policy.md)：改重试次数前读',
+  ], { 'context-docs/接口/retry-policy.md': '# 重试策略\n' }), [1]);
+});

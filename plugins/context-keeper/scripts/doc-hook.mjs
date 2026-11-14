@@ -41,10 +41,19 @@ const doc = path.relative(root, file).split(path.sep).join('/');
 // 旧目录 `.context/` 里的文档也管：升级后、改名前提醒不中断
 if (DOC_RE.test(doc) ? ENTRY_RE.test(doc) : !LEGACY_DOC_RE.test(doc) || LEGACY_ENTRY_RE.test(doc)) process.exit(0);
 
-// 先用 git grep 筛出提到这份文档的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的）。
-// 按文件名筛：Markdown 链接的目标是相对所在文件的路径（`../api/x.md`），不含完整路径；完整路径里也含文件名，下面逐行解析
-const r = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', '-e', path.posix.basename(doc)], { cwd: root, encoding: 'utf8', timeout: 5000 });
-if (r.error || r.status !== 0) process.exit(0); // 1 是没找到
+// 先用 git grep 筛出提到这份文档的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的），下面逐行解析。
+// 源码只认纯文本指针，按完整路径筛。Markdown 链接的目标是相对所在文件的路径（`../api/x.md`），不含完整路径，
+// 只在 .md 里按文件名筛：原样的、%20 转义空格的、整个 URL 编码的（十六进制大小写都认），和 check.mjs 解码后的口径一致
+const grep = (patterns, flags = [], spec = []) => {
+  const g = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', ...flags, ...patterns.flatMap((p) => ['-e', p]), '--', ...spec], { cwd: root, encoding: 'utf8', timeout: 5000 });
+  if (g.error || (g.status !== 0 && g.status !== 1)) process.exit(0); // 1 是没找到
+  return g.stdout.split('\0').filter(Boolean);
+};
+const base = path.posix.basename(doc);
+const candidates = new Set([
+  ...grep([doc]),
+  ...grep([...new Set([base, base.replace(/ /g, '%20'), encodeURI(base)])], ['-i'], ['*.md']),
+]);
 
 // 哪些文件里的路径算指针，和 check.mjs 同一套口径：rule、文档入口、CLAUDE.md、skill 里代码块外的行，
 // 以及认得的源码里注释里的。别的文档里提到它只是互相引用，README、CHANGELOG 这类 Markdown 里的多半是示例，都不算；
@@ -54,7 +63,7 @@ const exists = (p) => fs.existsSync(path.join(root, p));
 const MAX_ROWS = 10;
 const rows = [];
 let more = 0;
-for (const f of r.stdout.split('\0').filter(Boolean)) {
+for (const f of [...candidates].sort()) {
   const isMd = MARKDOWN_RE.test(f);
   if (isMd ? !isPointerMarkdown(f) && !LEGACY_ENTRY_RE.test(f) : !langFor(f)) continue;
   let text;

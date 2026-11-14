@@ -121,3 +121,14 @@ test('linksIn 不把脚注定义当链接；引用式用法从 linkDefs 取目�
   assert.deepEqual(linksIn('[a]: ../x.md', defs).map((l) => l.def), [true]);
   assert.equal(maskLinkTargets('读 [文字][a]', linksIn('读 [文字][a]', defs)), '读 [文字][a]');
 });
+
+test('linksIn：反斜杠转义的方括号不是链接，缩进的定义行是定义不是引用式用法', () => {
+  assert.deepEqual(linksIn('示例 \\[文字](context-docs/x.md)'), []);
+  const defs = linkDefs('- 列表\n    [m]: ../x.md\n');
+  assert.deepEqual([...defs], [['m', '../x.md']]);
+  assert.deepEqual(linksIn('    [m]: ../x.md', defs).map((l) => l.def), [true]);
+});
+
+test('isDocLink 只认新目录，写了旧目录的链接另报旧版路径', () => {
+  assert.ok(!isDocLink('.context/api/a.md', '.context/api/a.md'));
+});
