@@ -436,7 +436,7 @@ function claudeMdWith(lines) {
 const LINKED = {
   ...CLEAN,
   'apps/m/CLAUDE.md': '# m\n\n- 新增模型前读 [模型迁移](context-docs/models/migrate.md)\n',
-  'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [0039](../targets/kiro.md)。\n',
+  'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [kiro](../targets/kiro.md)。\n',
   'apps/m/context-docs/targets/kiro.md': '# kiro\n',
   'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 新增渠道前读 [kiro](../apps/m/context-docs/targets/kiro.md)\n`,
 };
@@ -449,7 +449,7 @@ test('Markdown 链接按所在文件的目录解析：相对链接不报失效�
 test('链接目标写成仓库根起的路径报错误，给出改好的相对路径', () => {
   const r = check(makeRepo({
     ...LINKED,
-    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [0039](apps/m/context-docs/targets/kiro.md)。\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [kiro](apps/m/context-docs/targets/kiro.md)。\n',
   }));
   const f = r.findings.find((x) => x.file === 'apps/m/context-docs/models/migrate.md');
   assert.ok(f && f.level === 'error' && /写成了仓库根起的路径.*改成 \.\.\/targets\/kiro\.md/.test(f.msg), JSON.stringify(r.findings));
@@ -466,12 +466,12 @@ test('链接目标写成仓库根起的路径时，按仓库根找得到的文�
 });
 
 test('不带目录名的相对链接断了也报', () => {
-  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0040](../targets/gone.md)\n' }));
+  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [gone](../targets/gone.md)\n' }));
   assert.ok(has(r, 'pointer', /链接指向不存在的文件 \.\.\/targets\/gone\.md/));
 });
 
 test('开头是 / 的链接按仓库根解析', () => {
-  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0039](/apps/m/context-docs/targets/kiro.md)\n' }));
+  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [kiro](/apps/m/context-docs/targets/kiro.md)\n' }));
   assert.deepEqual(r.findings, []);
 });
 
@@ -640,7 +640,7 @@ test('按仓库根找到的不是文档时不给改法：相对链接指的文�
   const r = check(makeRepo({
     ...LINKED,
     'models/kiro.md': '# 根目录下碰巧同名的普通文件\n',
-    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0039](models/kiro.md)\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [kiro](models/kiro.md)\n',
   }));
   const f = r.findings.find((x) => x.file === 'apps/m/context-docs/models/migrate.md');
   assert.ok(f && /链接指向不存在的文件 models\/kiro\.md/.test(f.msg), JSON.stringify(r.findings));
@@ -664,4 +664,111 @@ test('缩进代码块里的示例链接不查', () => {
     'apps/m/CLAUDE.md': '# m\n\n- 新增模型前读 [模型迁移](context-docs/models/migrate.md)\n\n示例：\n\n    [r]: context-docs/api/nope.md\n',
   }));
   assert.deepEqual(r.findings, []);
+});
+
+// ---------- 修剪候选 ----------
+
+const prune = (r, category) => r.findings.filter((f) => f.category === category);
+const pruneFiles = (r, category) => prune(r, category).map((f) => f.file).sort();
+
+test('空壳文档：独立成行的占位两处以上才报，表格单元格、代码块里的不算', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/api/shell.md': '# 超时取 5 秒\n\n状态：生效\n\n## 背景\n未记录\n\n## 决定\n上游最慢 3 秒，取 5 留余量。\n\n## 放弃的方案\n未记录\n\n（以上自 src/api/x.ts 迁入。）\n',
+    'context-docs/api/inline.md': '# 限流\n\n- 背景：未记录\n- **放弃的方案**：暂无（原文没写）\n- 决定：每秒 50 次\n',
+    'context-docs/api/one.md': '# 重试\n\n## 背景\n未记录\n\n## 决定\n上限 3。\n',
+    'context-docs/api/table.md': '# 延迟\n\n| 日期 | 数值 | 测法 |\n|---|---|---|\n| 2026-09-01 | 28 | 未记录 |\n| 2026-10-19 | 54 | 未记录 |\n',
+    'context-docs/api/code.md': '# 示例\n\n```markdown\n背景：未记录\n放弃的方案：未记录\n```\n',
+  }));
+  assert.deepEqual(pruneFiles(r, 'prune-shell'), ['context-docs/api/inline.md', 'context-docs/api/shell.md']);
+  assert.ok(prune(r, 'prune-shell').every((f) => f.level === 'warn'));
+});
+
+test('已取代：状态行里出现取代、推翻这类词才报', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/api/old.md': '# 旧方案\n\n状态：已取代，见 context-docs/api/retry-policy.md\n',
+    'context-docs/api/bold.md': '# 旧方案\n\n- **状态**：已被推翻（2026-11-10）\n',
+    'context-docs/api/live.md': '# 现行\n\n状态：生效\n\n推翻了旧的做法。\n',
+  }));
+  assert.deepEqual(pruneFiles(r, 'prune-superseded'), ['context-docs/api/bold.md', 'context-docs/api/old.md']);
+});
+
+test('决策日志形态：标题带编号或日期、正文按编号互相引用、编号对照表', () => {
+  const rows = Array.from({ length: 5 }, (_, i) => `| 000${i + 1} | \`context-docs/api/a${i}.md\` | 2026-08 |`).join('\n');
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/log/numbered.md': '# 0029：换成合并后的模型\n',
+    'context-docs/log/dated.md': '## 2026-08 · 输出上限 4096 → 64\n',
+    'context-docs/log/dated-full.md': '# 2026-09-25 · 改判\n',
+    'context-docs/log/ref.md': '# 重试策略\n\n推翻 [0035] 的做法。\n',
+    'context-docs/log/table.md': `# 口径变更记录\n\n| 旧编号 | 文件 | 时间 |\n|---|---|---|\n${rows}\n`,
+    'context-docs/log/year.md': '# 2026 年度预算\n\n上限 50 万。\n',
+    'context-docs/log/plain.md': '# 重试策略\n\n端口 0800 不用管。见 `[0035]` 只是示例。\n',
+  }));
+  assert.deepEqual(pruneFiles(r, 'prune-log'), ['dated-full', 'dated', 'numbered', 'ref', 'table'].map((x) => `context-docs/log/${x}.md`).sort());
+  assert.match(prune(r, 'prune-log').find((f) => f.file.endsWith('table.md')).msg, /编号对照表/);
+});
+
+test('过宽的 rule：paths 超过 10 项才报，花括号不展开，领域索引 rule 不报', () => {
+  const files = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`src/m/f${i}.ts`, 'export {};\n']));
+  const rule = (n) => `---\npaths:\n${Array.from({ length: n }, (_, i) => `  - "src/m/f${i}.ts"`).join('\n')}\n---\n\n改这里要同步 B。\n`;
+  const r = check(makeRepo({
+    ...CLEAN,
+    ...files,
+    '.claude/rules/m/eleven.md': rule(11),
+    '.claude/rules/m/ten.md': rule(10),
+    '.claude/rules/m/braces.md': '---\npaths: "src/m/f{0,1,2,3,4,5,6,7,8,9,10}.ts"\n---\n\n改这里要同步 B。\n',
+    '.claude/rules/m/context-index.md': rule(11).replace('改这里要同步 B。', '- 改 B 前读 `context-docs/api/retry-policy.md`：网关会封 IP'),
+  }));
+  assert.deepEqual(pruneFiles(r, 'prune-wide-rule'), ['.claude/rules/m/eleven.md']);
+  assert.match(prune(r, 'prune-wide-rule')[0].msg, /11 项/);
+});
+
+test('强调泛滥：⚠ 和加粗超过两处给提示，代码块和行内代码里的不算', () => {
+  const fm = '---\npaths:\n  - "src/styles/*.css"\n---\n\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    '.claude/rules/styling/loud.md': `${fm}⚠️ 改 token 后**必须**跑 \`pnpm tokens:build\`，**否则**不更新。\n`,
+    '.claude/rules/styling/ok.md': `${fm}改 token 后**必须**跑 \`**pnpm**\`，⚠️ 页面不报错。\n\n\`\`\`\n**x** ⚠️ **y**\n\`\`\`\n`,
+  }));
+  assert.deepEqual(pruneFiles(r, 'prune-emphasis'), ['.claude/rules/styling/loud.md']);
+  assert.equal(prune(r, 'prune-emphasis')[0].level, 'info');
+});
+
+test('修剪候选单独计数，不进 counts、不影响退出码', () => {
+  const r = check(makeRepo({ ...CLEAN, 'context-docs/payment/installments.md': '# 分期付款\n\n状态：已取代\n\n## 背景\n未记录\n\n## 放弃的方案\n未记录\n' }));
+  assert.deepEqual(r.counts, { error: 0, warn: 0, info: 0 });
+  assert.deepEqual(r.pruneCounts, { warn: 2, info: 0 });
+  assert.equal(r.status, 0);
+});
+
+test('规模汇总：每个作用域的 rule 条数和正文行数、文档数、指针数，文档之间的互相引用不算指针', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/api/retry-policy.md': '# 重试策略\n\n分期见 `context-docs/payment/installments.md`\n',
+    'apps/web/package.json': '{}\n',
+    'apps/web/src/a.ts': '// 上限 3：会封 IP。改上限前读 apps/web/context-docs/api/limits.md\nexport const A = 3;\n',
+    'apps/web/src/b.ts': 'export const B = 1;\n',
+    'apps/web/.claude/rules/api/sync.md': '---\npaths:\n  - "src/*.ts"\n---\n\n改 a 要同步 b。\n不同步会静默算错。\n',
+    'apps/web/context-docs/api/limits.md': '# 上限\n',
+  }));
+  const by = Object.fromEntries(r.scale.map((x) => [x.scope ?? '', x]));
+  assert.deepEqual(by[''], { scope: null, rules: 1, ruleLines: 1, docs: 2, pointers: 3 });
+  assert.deepEqual(by['apps/web/'], { scope: 'apps/web/', rules: 1, ruleLines: 2, docs: 1, pointers: 1 });
+  const only = check(makeRepo({ ...CLEAN, 'apps/web/.claude/rules/x.md': '---\npaths: "a.ts"\n---\n\nx\n', 'apps/web/a.ts': '' }), ['apps/web']);
+  assert.deepEqual(only.scale.map((x) => x.scope), ['apps/web/']);
+});
+
+test('路径参数在别的 git 仓库里时，检查那个仓库', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const path = await import('node:path');
+  const { SCRIPTS } = await import('./helpers.mjs');
+  const target = makeRepo({ ...CLEAN, 'context-docs/api/shell.md': '# x\n\n背景：未记录\n放弃的方案：未记录\n' });
+  const here = makeRepo({ 'README.md': '# 别的仓库\n' });
+  const run = spawnSync('node', [path.join(SCRIPTS, 'check.mjs'), target.repo, '--json'], { cwd: here.repo, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const r = JSON.parse(run.stdout);
+  assert.equal(r.root, target.repo);
+  assert.ok(r.findings.some((f) => f.category === 'prune-shell' && f.file === 'context-docs/api/shell.md'));
 });
