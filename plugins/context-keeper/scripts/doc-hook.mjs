@@ -11,11 +11,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
   ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
-  commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
+  commentLines, escapeLinkPath, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linkDefs, linkedFile, pointersIn, proseLines,
+  resolvePointer, splitLine,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -40,9 +41,28 @@ const doc = path.relative(root, file).split(path.sep).join('/');
 // 旧目录 `.context/` 里的文档也管：升级后、改名前提醒不中断
 if (DOC_RE.test(doc) ? ENTRY_RE.test(doc) : !LEGACY_DOC_RE.test(doc) || LEGACY_ENTRY_RE.test(doc)) process.exit(0);
 
-// 先用 git grep 筛出提到这个路径的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的）
-const r = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', '-e', doc], { cwd: root, encoding: 'utf8', timeout: 5000 });
-if (r.error || r.status !== 0) process.exit(0); // 1 是没找到
+// 先用 git grep 筛出提到这份文档的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的），下面逐行解析。
+// 源码只认纯文本指针，按完整路径筛。Markdown 链接的目标是相对所在文件的路径（`../api/x.md`），不含完整路径，
+// 只在 .md 里按文件名筛：原样的、%20 转义空格的、整个 URL 编码的、check.mjs 给出改法时的写法（escapeLinkPath，括号、`#` 也转义；
+// 十六进制大小写都认），和 check.mjs 解码后的口径一致。
+// 两次 grep 同时跑：hook 每次改文档都跑，串着跑要扫两遍工作区的时间。一次出错、超时（返回 null）只丢它那一份，另一份照列；两次都失败才静默退出
+const grep = (patterns, flags = [], spec = []) => new Promise((resolve) => {
+  const g = spawn('git', ['grep', '-lIz', '--untracked', '-F', ...flags, ...patterns.flatMap((p) => ['-e', p]), '--', ...spec], {
+    cwd: root, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let out = '';
+  g.stdout.setEncoding('utf8');
+  g.stdout.on('data', (d) => { out += d; });
+  g.on('error', () => resolve(null));
+  g.on('close', (code) => resolve(code === 0 || code === 1 ? out.split('\0').filter(Boolean) : null)); // 1 是没找到
+});
+const base = path.posix.basename(doc);
+const hits = await Promise.all([
+  grep([doc]),
+  grep([...new Set([base, base.replace(/ /g, '%20'), encodeURI(base), escapeLinkPath(base)])], ['-i'], ['*.md']),
+]);
+if (hits.every((h) => h === null)) process.exit(0);
+const candidates = new Set(hits.flat().filter((f) => f !== null));
 
 // 哪些文件里的路径算指针，和 check.mjs 同一套口径：rule、文档入口、CLAUDE.md、skill 里代码块外的行，
 // 以及认得的源码里注释里的。别的文档里提到它只是互相引用，README、CHANGELOG 这类 Markdown 里的多半是示例，都不算；
@@ -52,7 +72,7 @@ const exists = (p) => fs.existsSync(path.join(root, p));
 const MAX_ROWS = 10;
 const rows = [];
 let more = 0;
-for (const f of r.stdout.split('\0').filter(Boolean)) {
+for (const f of [...candidates].sort()) {
   const isMd = MARKDOWN_RE.test(f);
   if (isMd ? !isPointerMarkdown(f) && !LEGACY_ENTRY_RE.test(f) : !langFor(f)) continue;
   let text;
@@ -64,10 +84,17 @@ for (const f of r.stdout.split('\0').filter(Boolean)) {
     continue;
   }
   const comment = isMd ? null : commentLines(text.split(/\r?\n/)).comment;
-  for (const [line, i] of proseLines(text, !isMd)) {
+  const prose = proseLines(text, !isMd);
+  const defs = isMd ? linkDefs(text, prose) : null;
+  for (const [line, i] of prose) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
-    const hit = pointersIn(line, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc);
-    if (!hit || (!isMd && !inComment(line, i, comment, hit))) continue;
+    // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析。引用式链接列用到它的那一行（重点写在那里），不列定义行。
+    // 链接目标写成仓库根起的路径、按所在目录指不到文件的（0.8.0 整理时改出来的写法，check.mjs 报错）也列：那一行的重点照样是从这份文档提炼的
+    const { links, scan } = splitLine(f, line, defs);
+    const raw = pointersIn(scan, ANY_POINTER_RE).find((x) => resolvePointer(x, exists) === doc);
+    const linked = links.some((l) => !l.def && linkedFile(l, exists) === doc);
+    // 链接只在 Markdown 里认，源码看纯文本指针是不是写在注释里
+    if (isMd ? !raw && !linked : !raw || !inComment(line, i, comment, raw)) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
     const t = line.trim();
     rows.push(`- ${f}:${i + 1}  ${t.length > 200 ? `${t.slice(0, 200)}…` : t}`);
@@ -97,7 +124,8 @@ const msg = repeat
   : [
     `[context-keeper] 刚改的 ${doc} 被下面${rows.length + more > 1 ? '几' : '这一'}处指到，每一行里的重点都是从这份文档提炼的：`,
     ...rows,
-    ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
+    // 相对链接里只有所在文件起的路径，按完整路径 grep 不到
+    ...(more ? [`（另有 ${more} 处没列出：纯文本指针 grep ${doc} 看，Markdown 里的相对链接只写到文件名，grep ${base} 看）`] : []),
     '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
     ...(isLegacyDoc(doc) ? [`这份文档在${LEGACY_RENAME_HINT}。`] : []),
   ].join('\n');

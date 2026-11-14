@@ -430,3 +430,238 @@ test('按类型分的文档目录只跳过 node_modules：build、target 等目�
 function claudeMdWith(lines) {
   return { ...CLEAN, 'CLAUDE.md': `# 项目\n\n## 更多上下文\n${lines.join('\n')}\n` };
 }
+
+// ---------- Markdown 链接 ----------
+
+const LINKED = {
+  ...CLEAN,
+  'apps/m/CLAUDE.md': '# m\n\n- 新增模型前读 [模型迁移](context-docs/models/migrate.md)\n',
+  'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [0039](../targets/kiro.md)。\n',
+  'apps/m/context-docs/targets/kiro.md': '# kiro\n',
+  'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 新增渠道前读 [kiro](../apps/m/context-docs/targets/kiro.md)\n`,
+};
+
+test('Markdown 链接按所在文件的目录解析：相对链接不报失效，也算登记', () => {
+  const r = check(makeRepo(LINKED));
+  assert.deepEqual(r.findings, []);
+});
+
+test('链接目标写成仓库根起的路径报错误，给出改好的相对路径', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n渠道限制见 [0039](apps/m/context-docs/targets/kiro.md)。\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/m/context-docs/models/migrate.md');
+  assert.ok(f && f.level === 'error' && /写成了仓库根起的路径.*改成 \.\.\/targets\/kiro\.md/.test(f.msg), JSON.stringify(r.findings));
+  assert.equal(r.status, 1);
+});
+
+test('链接目标写成仓库根起的路径时，按仓库根找得到的文档照样算登记，不另报孤儿、缺索引', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 新增渠道前读 [kiro](apps/m/context-docs/targets/kiro.md)\n`,
+  }));
+  assert.deepEqual(r.findings.map((x) => [x.file, x.level]), [['context-docs/README.md', 'error']], JSON.stringify(r.findings));
+  assert.match(r.findings[0].msg, /改成 \.\.\/apps\/m\/context-docs\/targets\/kiro\.md/);
+});
+
+test('不带目录名的相对链接断了也报', () => {
+  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0040](../targets/gone.md)\n' }));
+  assert.ok(has(r, 'pointer', /链接指向不存在的文件 \.\.\/targets\/gone\.md/));
+});
+
+test('开头是 / 的链接按仓库根解析', () => {
+  const r = check(makeRepo({ ...LINKED, 'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0039](/apps/m/context-docs/targets/kiro.md)\n' }));
+  assert.deepEqual(r.findings, []);
+});
+
+test('只靠入口里的相对链接登记的文档不是孤儿', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 要接新渠道前读 [渠道](payment/channels.md)\n`,
+    'context-docs/payment/channels.md': '# 渠道\n',
+  }));
+  assert.ok(!has(r, 'orphan'), JSON.stringify(r.findings));
+});
+
+test('链接文字和链接目标指向不同文档报错误', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [apps/m/context-docs/models/migrate.md](../targets/kiro.md)\n',
+  }));
+  assert.ok(has(r, 'pointer', /不是同一份文档/));
+});
+
+test('链接文字是路径或引导词的登记行算路径打头，是标题的不算', () => {
+  assert.deepEqual(bareLinesOf([
+    'api 相关的项目文档：',
+    '- [retry-policy.md](../../../context-docs/api/retry-policy.md)：改重试次数前读',
+    '- [文档](../../../context-docs/api/retry-policy.md)：改重试次数前读',
+    '- 重试上限 3。改重试次数前读 [重试策略](../../../context-docs/api/retry-policy.md)',
+  ]), [2, 3]);
+});
+
+test('外链和代码块里的链接不查', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'context-docs/api/retry-policy.md': '# 重试策略\n\n[x](https://e.com/context-docs/a.md)\n```\n[z](context-docs/gone.md)\n```\n',
+  }));
+  assert.deepEqual(r.findings, []);
+});
+
+test('链接文字是标题加文件名的登记行不算路径打头', () => {
+  assert.deepEqual(bareLinesOf([
+    '- [重试策略 retry-policy.md](../../../context-docs/api/retry-policy.md)：改重试次数前读',
+  ]), []);
+});
+
+test('改好的相对路径保留锚点，空格写成 %20', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/my doc.md': '# my\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [a](apps/m/context-docs/targets/my%20doc.md#节) 和 [b](<apps/m/context-docs/targets/kiro.md?x=1>)\n',
+  }));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/my%20doc\.md#节$/), JSON.stringify(r.findings));
+  assert.ok(has(r, 'pointer', /改成 <\.\.\/targets\/kiro\.md\?x=1>$/), JSON.stringify(r.findings));
+});
+
+test('脚注定义不是链接：里面的纯文本路径照样按仓库根解析', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/m/CLAUDE.md': '# m\n\n- 重试上限 3，改重试次数前读[^1]\n\n[^1]: 改重试次数前读 context-docs/api/retry-policy.md\n',
+  }));
+  assert.deepEqual(r.findings, []);
+});
+
+test('引用式链接：用到它的那一行查写法、算登记，定义行只查目标', () => {
+  const entry = (def) => `${CLEAN['context-docs/README.md']}- 重试上限 3 次。改重试次数前读 [重试策略][r]\n\n${def}\n`;
+  const ok = check(makeRepo({ ...CLEAN, 'context-docs/README.md': entry('[r]: api/retry-policy.md') }));
+  assert.deepEqual(ok.findings, []);
+  const bad = check(makeRepo({ ...CLEAN, 'context-docs/README.md': entry('[R]: api/gone.md') }));
+  const errs = bad.findings.filter((f) => f.level === 'error');
+  assert.equal(errs.length, 1, JSON.stringify(bad.findings));
+  assert.equal(errs[0].line, 6);
+  assert.match(errs[0].msg, /链接指向不存在的文件 api\/gone\.md/);
+});
+
+test('链接目标里写了旧目录 .context/：目录已改名的报旧版路径、按新路径登记，没改名的也报', () => {
+  const renamed = check(makeRepo({
+    ...CLEAN,
+    'context-docs/README.md': `${CLEAN['context-docs/README.md']}- 重试上限 3 次。改重试次数前读 [重试](../.context/api/retry-policy.md)\n`,
+    'apps/m/CLAUDE.md': '# m\n\n- 重试上限 3 次。改重试次数前读 [重试](../../.context/api/retry-policy.md)\n',
+  }));
+  const msgs = renamed.findings.filter((f) => /旧版路径/.test(f.msg));
+  assert.ok(msgs.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/retry-policy.md → ../../context-docs/api/retry-policy.md')), JSON.stringify(renamed.findings));
+  assert.ok(!has(renamed, 'orphan'), JSON.stringify(renamed.findings));
+
+  const notYet = check(makeRepo({
+    ...CLEAN,
+    '.context/api/old.md': '# 旧\n',
+    'apps/m/CLAUDE.md': '# m\n\n- 改旧逻辑前读 [旧](../../.context/api/old.md)\n',
+  }));
+  assert.ok(notYet.findings.some((f) => f.file === 'apps/m/CLAUDE.md' && f.msg.includes('../../.context/api/old.md → ../../context-docs/api/old.md')), JSON.stringify(notYet.findings));
+});
+
+test('改好的相对路径转义会弄断链接的字：)、% 写成 %29、%25', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/b).md': '# b\n',
+    'apps/m/context-docs/targets/c%d.md': '# c\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [b](apps/m/context-docs/targets/b%29.md) 和 [c](apps/m/context-docs/targets/c%25d.md)\n',
+  }));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/b%29\.md$/), JSON.stringify(r.findings));
+  assert.ok(has(r, 'pointer', /改成 \.\.\/targets\/c%25d\.md$/), JSON.stringify(r.findings));
+});
+
+test('./ 开头的失效链接是照着所在文件写的相对路径，不当成仓库根起的路径给改法', () => {
+  const r = check(makeRepo({ ...LINKED, 'apps/m/CLAUDE.md': '# m\n\n- 改重试次数前读 [重试](./context-docs/api/retry-policy.md)\n' }));
+  const f = r.findings.find((x) => x.file === 'apps/m/CLAUDE.md' && x.level === 'error');
+  assert.ok(f && /链接指向不存在的文件 \.\/context-docs\/api\/retry-policy\.md/.test(f.msg), JSON.stringify(r.findings));
+});
+
+test('链接文字和目标写的是同一个旧路径时只列一次', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'CLAUDE.md': `${CLEAN['CLAUDE.md']}- 重试上限 3 次。改重试次数前读 [.context/api/retry-policy.md](.context/api/retry-policy.md)\n`,
+  }));
+  const f = r.findings.find((x) => x.file === 'CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f, JSON.stringify(r.findings));
+  assert.equal(f.msg.split('.context/api/retry-policy.md → ').length, 2, f.msg);
+});
+
+test('子目录里链接目标写成仓库根起的旧路径：目录已改名的按新路径登记，直接给出相对路径', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [重试](apps/x/.context/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('apps/x/.context/a.md → context-docs/a.md'), JSON.stringify(r.findings));
+  assert.ok(!has(r, 'orphan'), JSON.stringify(r.findings));
+});
+
+test('子目录里链接文字和目标写同一个仓库根起的旧路径：文字和目标的改法不同，两条都列', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [apps/x/.context/a.md](apps/x/.context/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('apps/x/.context/a.md → apps/x/context-docs/a.md'), JSON.stringify(r.findings));
+  assert.ok(f.msg.includes('链接目标 apps/x/.context/a.md → context-docs/a.md'), f.msg);
+});
+
+test('尖括号包着的旧链接目标也给出新路径', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'CLAUDE.md': `${CLEAN['CLAUDE.md']}- 重试上限 3 次。改重试次数前读 [重试](<.context/api/retry-policy.md>)\n`,
+  }));
+  const f = r.findings.find((x) => x.file === 'CLAUDE.md' && /旧版路径/.test(x.msg));
+  assert.ok(f && f.msg.includes('<.context/api/retry-policy.md> → <context-docs/api/retry-policy.md>'), JSON.stringify(r.findings));
+});
+
+test('链接文字照着相对的链接目标写、按仓库根指不到文件时，说清楚是链接文字要改、改成什么', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'apps/x/CLAUDE.md': '# x\n\n- 网关封 IP。改重试前读 [context-docs/a.md](context-docs/a.md)\n',
+    'apps/x/context-docs/a.md': '# a\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/x/CLAUDE.md' && x.level === 'error');
+  assert.ok(f && /链接文字里的路径 context-docs\/a\.md 指不到文件.*apps\/x\/context-docs\/a\.md/.test(f.msg), JSON.stringify(r.findings));
+});
+
+test('链接文字是带中文路径段的路径时也算路径打头', () => {
+  assert.deepEqual(bareLinesOf([
+    '- [context-docs/接口/retry-policy.md](../../../context-docs/接口/retry-policy.md)：改重试次数前读',
+  ], { 'context-docs/接口/retry-policy.md': '# 重试策略\n' }), [1]);
+});
+
+test('按仓库根找到的不是文档时不给改法：相对链接指的文档没了，只报失效', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'models/kiro.md': '# 根目录下碰巧同名的普通文件\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [0039](models/kiro.md)\n',
+  }));
+  const f = r.findings.find((x) => x.file === 'apps/m/context-docs/models/migrate.md');
+  assert.ok(f && /链接指向不存在的文件 models\/kiro\.md/.test(f.msg), JSON.stringify(r.findings));
+  assert.ok(!has(r, 'pointer', /写成了仓库根起的路径/));
+});
+
+test('文件名带 #、括号的文档：转义了的相对链接有效，改好的路径也转义', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/context-docs/targets/c# (v2).md': '# c#\n',
+    'apps/m/context-docs/models/migrate.md': '# 迁移\n\n见 [a](../targets/c%23%20%28v2%29.md) 和 [b](apps/m/context-docs/targets/c%23%20%28v2%29.md#节)\n',
+  }));
+  const fs = r.findings.filter((x) => x.file === 'apps/m/context-docs/models/migrate.md');
+  assert.equal(fs.length, 1, JSON.stringify(r.findings));
+  assert.match(fs[0].msg, /改成 \.\.\/targets\/c%23%20%28v2%29\.md#节/);
+});
+
+test('缩进代码块里的示例链接不查', () => {
+  const r = check(makeRepo({
+    ...LINKED,
+    'apps/m/CLAUDE.md': '# m\n\n- 新增模型前读 [模型迁移](context-docs/models/migrate.md)\n\n示例：\n\n    [r]: context-docs/api/nope.md\n',
+  }));
+  assert.deepEqual(r.findings, []);
+});

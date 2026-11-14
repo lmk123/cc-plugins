@@ -64,6 +64,7 @@ test('指到它的行超过 10 处时只列 10 处，其余给出数目', () => 
   const msg = docHook(makeRepo({ [DOC]: '# 重试策略\n', 'src/a.ts': `${lines}\n` }), { file: DOC });
   assert.equal(msg.split('\n').filter((l) => l.startsWith('- src/a.ts:')).length, 10);
   assert.match(msg, /另有 2 处没列出/);
+  assert.match(msg, /grep retry-policy\.md 看/); // 相对链接里只有文件名
 });
 
 test('CONTEXT_KEEPER_DOC_HOOK=0 时关闭', () => {
@@ -145,4 +146,51 @@ test('改名前改了旧目录 .context/ 里的文档，照样列出指到它的
   assert.match(msg, /- \.context\/README\.md:3/);
   assert.match(msg, /- src\/api\/retry\.ts:1/);
   assert.match(msg, /organize-context/);
+});
+
+test('相对链接指到这份文档的也列出来，解析到别处的同名文件不列', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](api/retry-policy.md)\n- 另一份：[同名](other/retry-policy.md)\n',
+    'context-docs/other/retry-policy.md': '# 别的\n',
+  }), { file: DOC });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.doesNotMatch(msg, /README\.md:4/);
+});
+
+test('链接目标写成仓库根起的路径的（0.8.0 整理出来的写法）也列出来', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'apps/m/CLAUDE.md': '# m\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](context-docs/api/retry-policy.md)\n',
+  }), { file: DOC });
+  assert.match(msg, /- apps\/m\/CLAUDE\.md:3 {2}- 网关连续 5 次失败封 IP/);
+});
+
+test('引用式链接列出用到它的那一行，不列定义行', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试][r]\n\n[r]: api/retry-policy.md\n',
+  }), { file: DOC });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.doesNotMatch(msg, /README\.md:5/);
+});
+
+test('URL 编码的相对链接也列出来', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/api/重试 策略.md': '# 重试\n',
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](api/%E9%87%8D%E8%AF%95%20%E7%AD%96%E7%95%A5.md)\n- 另一份：[空格](api/%e9%87%8d%e8%af%95%20%e7%ad%96%e7%95%a5.md)\n',
+  }), { file: 'context-docs/api/重试 策略.md' });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.match(msg, /- context-docs\/README\.md:4/);
+});
+
+test('照 check.mjs 的改法转义了括号、# 的相对链接也列出来', () => {
+  const doc = 'context-docs/api/c# (v2).md';
+  const msg = docHook(makeRepo({
+    ...REPO,
+    [doc]: '# c#\n',
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [c#](api/c%23%20%28v2%29.md)\n',
+  }), { file: doc });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
 });
