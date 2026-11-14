@@ -28,7 +28,7 @@ const LANGS = {
   py: PY, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
   yaml: HASH, yml: HASH, toml: HASH, ex: HASH, exs: HASH, nim: HASH, cr: HASH, tf: HASH,
   sql: DASH, lua: DASH, hs: DASH,
-  // 不是编程语言、但能写注释的常见格式：指针写在这些文件的注释里也要认
+  // 不是编程语言、但能写注释的常见格式：这些文件里的长注释也要扫
   proto: SLASH, prisma: SLASH, sol: SLASH, jsonc: SLASH, json5: SLASH,
   graphql: { ...HASH, strings: ['"""'] }, gql: { ...HASH, strings: ['"""'] },
   hcl: { line: ['#', '//'], block: true, html: false },

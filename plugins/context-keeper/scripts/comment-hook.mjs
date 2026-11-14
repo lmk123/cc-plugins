@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 注释只留一句重点，扩展内容进 context-docs/、原处留指针。
+// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 注释只留一条结论和最多一句理由，经过留给 commit 和 PR。
 // 只提醒，不阻断。设环境变量 CONTEXT_KEEPER_COMMENT_HOOK=0 可关闭。
 //
 // 做法：对写入后的整个文件找注释块，块里至少一半的行是这次新写的才提醒。
@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findCommentBlocks } from './lib/comments.mjs';
-import { DOC_DIR, NOT_CODE_DIR_RE } from './lib/pointers.mjs';
+import { NOT_CODE_DIR_RE } from './lib/markdown.mjs';
 
 if (process.env.CONTEXT_KEEPER_COMMENT_HOOK === '0') process.exit(0);
 
@@ -101,11 +101,10 @@ if (!hits.length) process.exit(0);
 
 const msg = [
   `[context-keeper] 刚写入的 ${file} 里有长注释块：${hits.join('、')}。`,
-  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范（用 record-context）处理：',
-  '先过准入门槛（不知道会做错、错了不报错或代价高、测试和 lint 拦不住），经过、流水、推导直接删掉，留给 commit，不建文档；',
-  `注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行，删完写得进 3 行就不建文档；过了门槛、3 行写不下的数字、试过的方案才移进 ${DOC_DIR}/<领域>/<slug>.md，`,
-  // 示例路径拆开写，免得 check.mjs 把它当成失效指针
-  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数、并发或超时前读 ${['apps/web', DOC_DIR, 'api/upstream-gateway.md'].join('/')}\`。`,
+  '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过这类背景，按 context-keeper 规范（用 record-context）处理：',
+  '注释只留一条结论（做什么、别做什么、改这里要同步哪里）和最多一句理由，1–3 行；',
+  '经过、时间线、状态、实测流水、被否掉方案的论证直接删掉，写进 commit message 或 PR 描述，不另建文档，也不留指针；',
+  '读代码就看得出来、或者测试和 lint 拦得住的，整段删掉。',
   '同样的内容也适用于其他文件时，写成 rule 而不是注释。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
 ].join('');
 
