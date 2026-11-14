@@ -1,6 +1,6 @@
 {
   "name": "context-keeper",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "整理与沉淀项目上下文：CLAUDE.md 常驻部分尽量小，单个文件的知识写成紧贴代码的短注释，多个文件共用的写成 rule，扩展内容进 context-docs/ 并在原处留指针按需读；兼容 monorepo 与单仓库",
   "author": {
     "name": "lmk123",
