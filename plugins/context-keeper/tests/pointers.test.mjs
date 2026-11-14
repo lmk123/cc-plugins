@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pointersIn, resolvePointer, TRIGGER_RE } from '../scripts/lib/pointers.mjs';
+import { ANY_POINTER_RE, LEGACY_POINTER_RE, pointersIn, resolvePointer, TRIGGER_RE } from '../scripts/lib/pointers.mjs';
 
 // 传给 TRIGGER_RE 的是去掉指针路径之后的那一行
 test('TRIGGER_RE 认得写了"什么时候读"的指针', () => {
@@ -40,16 +40,23 @@ test('TRIGGER_RE 不把话题式的指针当成写了触发条件', () => {
 });
 
 test('pointersIn 取出一行里的指针', () => {
-  assert.deepEqual(pointersIn('// 改 X 前读 apps/web/_context/api/retry-policy.md（经过）'), ['apps/web/_context/api/retry-policy.md']);
-  assert.deepEqual(pointersIn('详见_context/a.md 和 ./_context/b/c-d.md'), ['_context/a.md', '_context/b/c-d.md']);
-  assert.deepEqual(pointersIn('!_context/**/*.md'), []);
-  assert.deepEqual(pointersIn('my_context/a.md 和 src/build_context/b.md'), []);
+  assert.deepEqual(pointersIn('// 改 X 前读 apps/web/context-docs/api/retry-policy.md（经过）'), ['apps/web/context-docs/api/retry-policy.md']);
+  assert.deepEqual(pointersIn('详见context-docs/a.md 和 ./context-docs/b/c-d.md'), ['context-docs/a.md', 'context-docs/b/c-d.md']);
+  assert.deepEqual(pointersIn('!context-docs/**/*.md'), []);
+  assert.deepEqual(pointersIn('my-context-docs/a.md 和 src/build-context-docs/b.md'), []);
   assert.deepEqual(pointersIn('没有指针'), []);
 });
 
 test('resolvePointer 去掉紧贴在路径前面的中文', () => {
-  const exists = (p) => p === '包/_context/a.md' || p === 'apps/_context/b.md';
-  assert.equal(resolvePointer('见包/_context/a.md', exists), '包/_context/a.md');
-  assert.equal(resolvePointer('apps/_context/b.md', exists), 'apps/_context/b.md');
-  assert.equal(resolvePointer('apps/_context/missing.md', exists), null);
+  const exists = (p) => p === '包/context-docs/a.md' || p === 'apps/context-docs/b.md';
+  assert.equal(resolvePointer('见包/context-docs/a.md', exists), '包/context-docs/a.md');
+  assert.equal(resolvePointer('apps/context-docs/b.md', exists), 'apps/context-docs/b.md');
+  assert.equal(resolvePointer('apps/context-docs/missing.md', exists), null);
+});
+
+test('pointersIn 默认只认新目录；传入旧目录或两种都认的正则时按它认', () => {
+  const line = '// 读 .context/a.md 和 pkg/context-docs/b.md，foo.context/c.md 不算';
+  assert.deepEqual(pointersIn(line), ['pkg/context-docs/b.md']);
+  assert.deepEqual(pointersIn(line, LEGACY_POINTER_RE), ['.context/a.md']);
+  assert.deepEqual(pointersIn(line, ANY_POINTER_RE), ['.context/a.md', 'pkg/context-docs/b.md']);
 });

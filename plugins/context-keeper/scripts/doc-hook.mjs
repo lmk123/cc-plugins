@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 改了 _context/ 里的项目文档之后，列出指到这份文档的行
+// PostToolUse hook：Write / Edit / MultiEdit 改了 context-docs/ 里的项目文档之后，列出指到这份文档的行
 // （领域索引 rule、文档入口、rule、CLAUDE.md、skill 和源码注释里的指针），提醒 Claude：文档里的结论变了，这些行里的重点要跟着改。
 // 这些行里的重点是从文档提炼的，文档改了它们不会自己变，而 Claude 看了重点多半不会再去读文档。
 // 只提醒，不阻断；没有任何一处指到的文档（比如刚新建的）不提醒。设环境变量 CONTEXT_KEEPER_DOC_HOOK=0 可关闭。
@@ -14,7 +14,8 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
-  DOC_RE, ENTRY_RE, MARKDOWN_RE, commentLines, findRoot, inComment, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
+  ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, MARKDOWN_RE,
+  commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -35,8 +36,9 @@ const file = path.resolve(input.cwd || process.cwd(), ti.file_path);
 const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
 if (!root) process.exit(0);
 const doc = path.relative(root, file).split(path.sep).join('/');
-// 只管文档。文档入口是清单，不是文档：指到它的行里没有从它提炼的重点
-if (!DOC_RE.test(doc) || ENTRY_RE.test(doc)) process.exit(0);
+// 只管文档。文档入口是清单，不是文档：指到它的行里没有从它提炼的重点。
+// 旧目录 `.context/` 里的文档也管：升级后、改名前提醒不中断
+if (DOC_RE.test(doc) ? ENTRY_RE.test(doc) : !LEGACY_DOC_RE.test(doc) || LEGACY_ENTRY_RE.test(doc)) process.exit(0);
 
 // 先用 git grep 筛出提到这个路径的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的）
 const r = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', '-e', doc], { cwd: root, encoding: 'utf8', timeout: 5000 });
@@ -52,7 +54,7 @@ const rows = [];
 let more = 0;
 for (const f of r.stdout.split('\0').filter(Boolean)) {
   const isMd = MARKDOWN_RE.test(f);
-  if (isMd ? !isPointerMarkdown(f) : !langFor(f)) continue;
+  if (isMd ? !isPointerMarkdown(f) && !LEGACY_ENTRY_RE.test(f) : !langFor(f)) continue;
   let text;
   try {
     const full = path.join(root, f);
@@ -64,7 +66,7 @@ for (const f of r.stdout.split('\0').filter(Boolean)) {
   const comment = isMd ? null : commentLines(text.split(/\r?\n/)).comment;
   for (const [line, i] of proseLines(text, !isMd)) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
-    const hit = pointersIn(line).find((raw) => resolvePointer(raw, exists) === doc);
+    const hit = pointersIn(line, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc);
     if (!hit || (!isMd && !inComment(line, i, comment, hit))) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
     const t = line.trim();
@@ -97,6 +99,7 @@ const msg = repeat
     ...rows,
     ...(more ? [`（另有 ${more} 处没列出，grep 这个路径看）`] : []),
     '这次改动让哪一行的重点不再成立（结论变了、提到的数值变了），同一次改动里把那一行也改掉；都还成立就不用动。',
+    ...(isLegacyDoc(doc) ? ['这份文档还在旧目录 `.context/`，0.8.0 起要改名为 `context-docs/`：改完提醒用户跑 organize-context 迁移（把目录 git mv 改名，指针一并改掉）。'] : []),
   ].join('\n');
 
 process.stdout.write(JSON.stringify({

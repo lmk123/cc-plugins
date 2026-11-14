@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse hook：要改的代码附近有指向 _context/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
+// PreToolUse hook：要改的代码附近有指向 context-docs/ 文档的注释指针、而本会话还没读过那份文档时，拦下这次编辑，
 // 把指针原文给 Claude 看，让它按指针写的触发条件决定先读文档还是直接重试。同一会话里每处指针只拦一次，文档读过之后不再拦。
 // 主会话和每个子代理各算各的：子代理的 context 是独立的，主会话读过、被拦过都不代表它知道。
 // 主会话压缩上下文之后（SessionStart，source 为 compact）清掉主会话的状态：拦过、读过都重新算。
@@ -12,7 +12,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { MARKDOWN_RE, commentLines, findRoot, pointersIn, resolvePointer } from './lib/pointers.mjs';
+import {
+  ANY_POINTER_RE, DOC_DIR, LEGACY_DOC_DIR, MARKDOWN_RE, commentLines, findRoot, isLegacyDoc, pointersIn, resolvePointer,
+} from './lib/pointers.mjs';
 import { stateFile as stateFileFor } from './lib/state.mjs';
 
 let input;
@@ -48,7 +50,7 @@ if (MARKDOWN_RE.test(file)) process.exit(0);
 // 文件不在它下面就不管
 const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
 if (!root) process.exit(0);
-if (/(^|[\\/])(_context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
+if (/(^|[\\/])(context-docs|\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');
 let text;
@@ -150,7 +152,8 @@ const exists = (p) => {
 // 一处指针 = 一份文档 + 指到它的那一行。同一份文档可以被几处指到、各写各的触发条件，所以按处记，不按文档记
 const hits = []; // { doc: 仓库根起的文档路径, k: 行下标 }
 for (const k of [...near].sort((a, b) => a - b)) {
-  for (const raw of pointersIn(lines[k])) {
+  // 旧目录 `.context/` 的指针也认：升级后、改名前保护不中断，拦下时提示改名
+  for (const raw of pointersIn(lines[k], ANY_POINTER_RE)) {
     const doc = resolvePointer(raw, exists);
     if (doc) hits.push({ doc, k }); // 失效指针交给 check.mjs
   }
@@ -249,18 +252,29 @@ if (!todo.length) process.exit(0);
 
 // ---------- 本会话读过哪些 ----------
 
-// 读过：Read / Edit / Write 过这个文件，或 Bash 里用 cat / head / tail 这类命令读过它（按 `_context/…` 部分认：
+// 读过：Read / Edit / Write 过这个文件，或 Bash 里用 cat / head / tail 这类命令读过它（按 `context-docs/…` 部分认：
 // cd 进子目录后 cat 时没有仓库根起的前缀），并且那次调用没报错——路径拼错、读失败的不算。
 // `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
-// 按完整的目录名找（开头或紧跟 `/`）：领域目录叫 `user_context/` 时不能从它中间截
-const tailOf = (p) => p.slice(p.lastIndexOf('/_context/') + 1);
+// 按完整的目录名找最后一个文档目录段：领域目录叫 `user-context-docs/` 时不能从它中间截
+const DOC_DIRS = [DOC_DIR, LEGACY_DOC_DIR];
+const tailOf = (p) => {
+  const segs = p.split('/');
+  let k = segs.length - 1;
+  while (k > 0 && !DOC_DIRS.includes(segs[k])) k--;
+  return segs.slice(k).join('/');
+};
+// s 里提到 tail，且前面是开头、空白、引号、`/` 或 `=`：`user-context-docs/…` 不算提到 `context-docs/…`
+const mentions = (s, tail) => {
+  for (let i = s.indexOf(tail); i !== -1; i = s.indexOf(tail, i + 1)) if (i === 0 || /[\s'"`/=]/.test(s[i - 1])) return true;
+  return false;
+};
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result
 const READ_CMDS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'nl']);
 const bashReads = (cmd, tail) => cmd.split(/&&|\|\||[;|\n]/).some((seg) => {
-  if (!seg.includes(tail)) return false;
+  if (!mentions(seg, tail)) return false;
   const words = seg.trim().split(/\s+/);
   while (words.length && /^\w+=/.test(words[0])) words.shift(); // FOO=bar cat …
   const name = path.basename(words[0] || '');
@@ -269,7 +283,8 @@ const bashReads = (cmd, tail) => cmd.split(/&&|\|\||[;|\n]/).some((seg) => {
 try {
   const tf = transcriptFile();
   const transcript = tf ? fs.readFileSync(tf, 'utf8') : '';
-  const tails = [...unread].map(tailOf);
+  // 转录是 JSON：Windows 路径里的 `\` 写成 `\\`，按两种分隔符都筛一遍
+  const tails = [...unread].map(tailOf).flatMap((t) => [t, t.split('/').join('\\\\')]);
   for (const l of transcript.split('\n')) {
     if (l.includes('"compact_boundary"')) {
       try { if (JSON.parse(l).subtype === 'compact_boundary') { seen.clear(); pending.clear(); } } catch {}
@@ -288,7 +303,7 @@ try {
       }
       if (o.type !== 'assistant' || c.type !== 'tool_use' || !c.input || !c.id) continue;
       for (const p of unread) {
-        const fp = typeof c.input.file_path === 'string' ? c.input.file_path.split(path.sep).join('/') : '';
+        const fp = typeof c.input.file_path === 'string' ? c.input.file_path.replace(/\\/g, '/') : '';
         if (fp ? fp === p || fp.endsWith(`/${p}`) : c.name === 'Bash' && typeof c.input.command === 'string' && bashReads(c.input.command, tailOf(p))) {
           pending.set(c.id, p);
         }
@@ -335,6 +350,9 @@ const msg = [
   ...shown,
   // 指针写的是仓库根起的路径，会话可能开在子目录里：给出绝对路径，免得按当前目录拼错
   `文档的绝对路径：${[...new Set(todo.map((x) => path.join(root, x.doc)))].slice(0, 20).join('、')}`,
+  ...(todo.some((x) => isLegacyDoc(x.doc))
+    ? ['其中在旧目录 `.context/` 里的文档，0.8.0 起要改名为 `context-docs/`：这次先照常处理，改完提醒用户跑 organize-context 迁移（把目录 git mv 改名，指针一并改掉）。']
+    : []),
   '按指针写的"什么时候读"判断：这次改动在条件内，先读文档再重新提交这次编辑；不在条件内，直接重新提交即可，同一处指针本会话不会再拦。',
   '改完之后，指针里的重点或文档里的说法不再成立的（比如改了指针提到的数值），同一次改动里一并更新；领域索引 rule、文档入口里登记这份文档的行，重点跟着不成立的也一并改。',
 ].join('\n');

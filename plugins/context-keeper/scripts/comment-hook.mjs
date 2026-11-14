@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 注释只留一句重点，扩展内容进 _context/、原处留指针。
+// PostToolUse hook：Write / Edit / MultiEdit 新写入了长注释块时，提醒 Claude 注释只留一句重点，扩展内容进 context-docs/、原处留指针。
 // 只提醒，不阻断。设环境变量 CONTEXT_KEEPER_COMMENT_HOOK=0 可关闭。
 //
 // 做法：对写入后的整个文件找注释块，块里至少一半的行是这次新写的才提醒。
@@ -34,7 +34,7 @@ function projectRelative(abs) {
   return rel.startsWith('..') || path.isAbsolute(rel) ? path.basename(abs) : rel;
 }
 const rel = projectRelative(path.resolve(input.cwd || process.cwd(), file));
-if (/(^|[\\/])(_context|\.claude|node_modules)([\\/])/.test(rel)) process.exit(0);
+if (/(^|[\\/])(context-docs|\.context|\.claude|node_modules)([\\/])/.test(rel)) process.exit(0);
 
 // 统一成 \n，CRLF 文件里行号才对得上
 const lf = (s) => s.replace(/\r\n?/g, '\n');
@@ -101,9 +101,9 @@ if (!hits.length) process.exit(0);
 const msg = [
   `[context-keeper] 刚写入的 ${file} 里有长注释块：${hits.join('、')}。`,
   '如果其中讲的是为什么这么做、以前的方案、实测数字、踩坑经过、外部约束这类背景，按 context-keeper 规范（用 record-context）拆开：',
-  '注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行；经过、试过的方案、数字等扩展内容移进 _context/<领域>/<slug>.md，',
+  '注释只留必须知道的那一句（做什么、坑、一句原因），1–3 行；经过、试过的方案、数字等扩展内容移进 context-docs/<领域>/<slug>.md，',
   // 示例路径拆开写，免得 check.mjs 把它当成失效指针
-  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数或退避前读 ${['apps/web', '_context', 'api/retry-policy.md'].join('/')}\`。`,
+  `原处留「重点 + 什么时候读 + 仓库根起的路径」，例如 \`// 重试上限 3：网关连续 5 次失败会封 IP。改重试次数或退避前读 ${['apps/web', 'context-docs', 'api/retry-policy.md'].join('/')}\`。`,
   '同样的内容也适用于其他文件时，写成 rule 而不是注释。注释只是在说明这段代码做什么、怎么用的，忽略本提示。',
 ].join('');
 

@@ -1,5 +1,5 @@
-// 指向 _context/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
-// 指针一律写仓库根起的路径（`<作用域>/_context/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
+// 指向 context-docs/ 文档的指针，供 check.mjs、pointer-guard.mjs 和 doc-hook.mjs 共用。
+// 指针一律写仓库根起的路径（`<作用域>/context-docs/<领域>/<slug>.md`）。这个文件会随 check.mjs 复制进项目，注释里不写具体示例路径，免得被当成失效指针。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,8 +7,12 @@ import path from 'node:path';
 // ---------- 文件分类：哪些文件里的路径算指针 ----------
 
 export const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
-export const DOC_RE = /(^|\/)_context\/.+\.md$/; // 区分大小写：和 POINTER_RE 口径一致
-export const ENTRY_RE = /(^|\/)_context\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+export const DOC_DIR = 'context-docs';
+export const LEGACY_DOC_DIR = '.context'; // 0.7.x 及更早的文档目录：check.mjs 报出来要求改名，hook 在改名前照样认，保护不中断
+export const DOC_RE = /(^|\/)context-docs\/.+\.md$/; // 区分大小写：和 POINTER_RE 口径一致
+export const ENTRY_RE = /(^|\/)context-docs\/README\.md$/; // 文档入口：登记挂不到代码上的文档，本身不是文档
+export const LEGACY_DOC_RE = /(^|\/)\.context\/.+\.md$/;
+export const LEGACY_ENTRY_RE = /(^|\/)\.context\/README\.md$/;
 export const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
 export const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 export const MARKDOWN_RE = /\.(md|mdx|markdown)$/i;
@@ -47,22 +51,33 @@ export function findRoot(file, base) {
 
 // ---------- 指针 ----------
 
-// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见_context/…"这种紧贴中文的写法也能认出来
-export const POINTER_RE = /(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*_context\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])/gu;
+// 路径段允许中文等非 ASCII 字符；前面紧贴的字符只排除 ASCII 的路径字符，这样"详见context-docs/…"这种紧贴中文的写法也能认出来。
+// dirs 是文档目录名（不转义）的列表
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const pointerRe = (dirs) => new RegExp(
+  String.raw`(?<![\w./-])((?:[\p{L}\p{N}_.-]+\/)*(?:${dirs.map(reEscape).join('|')})\/[\p{L}\p{N}_./-]*?[\p{L}\p{N}_-]\.md)(?![\p{L}\p{N}_.-])`,
+  'gu',
+);
+export const POINTER_RE = pointerRe([DOC_DIR]);
+export const LEGACY_POINTER_RE = pointerRe([LEGACY_DOC_DIR]);
+export const ANY_POINTER_RE = pointerRe([DOC_DIR, LEGACY_DOC_DIR]); // hook 用：改名前的旧指针照样认
 
-// 一行里的指针原文（去重，去掉开头的 ./）
-export function pointersIn(line) {
+// 一行里的指针原文（去重，去掉开头的 ./）。re 默认只认新目录
+export function pointersIn(line, re = POINTER_RE) {
   const out = [];
-  if (!line.includes('_context/')) return out;
-  for (const m of line.matchAll(POINTER_RE)) {
+  if (!line.includes('context')) return out; // 两种目录名都含 context，先粗筛
+  for (const m of line.matchAll(re)) {
     const raw = m[1].replace(/^\.\//, '');
     if (!out.includes(raw)) out.push(raw);
   }
   return out;
 }
 
-// 中文正文紧贴路径时（"见包/_context/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
-// 第一段至少留一个字符，免得退化成根作用域的 `_context/`。exists(p) 判断仓库根起的路径是否存在，都不存在时返回 null
+// 文档路径是不是在旧目录里
+export const isLegacyDoc = (p) => LEGACY_DOC_RE.test(p);
+
+// 中文正文紧贴路径时（"见包/context-docs/…"），前面的字会被并进第一段：逐个去掉开头的非 ASCII 字符再试，
+// 第一段至少留一个字符，免得退化成根作用域的 `context-docs/`。exists(p) 判断仓库根起的路径是否存在，都不存在时返回 null
 export function resolvePointer(raw, exists) {
   for (let q = raw; ; q = q.replace(/^[^\x00-\x7f]/u, '')) {
     if (exists(q)) return q;

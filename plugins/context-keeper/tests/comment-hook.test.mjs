@@ -29,7 +29,7 @@ test('已有的长注释里只改一行不提醒，一半以上是新写的才�
   assert.ok(commentHook(t, { file: 'src/a.ts', tool: 'Edit', response: patch([' // 一', '+// 二', '+// 三', '+// 改过的']) }));
 });
 
-test('_context/ 和 .claude/ 下的文件不管', () => {
+test('context-docs/ 和 .claude/ 下的文件不管', () => {
   const t = makeRepo({ '.claude/hooks/a.sh': '# 一\n# 二\n# 三\n# 四\necho 1\n' });
   assert.equal(commentHook(t, { file: '.claude/hooks/a.sh', response: created }), null);
 });
