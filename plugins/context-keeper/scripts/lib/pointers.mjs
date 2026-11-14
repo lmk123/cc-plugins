@@ -82,6 +82,63 @@ export function pointersIn(line, re = POINTER_RE) {
   return out;
 }
 
+// ---------- Markdown 链接 ----------
+// 纯文本指针（反引号或裸写的路径）写仓库根起的路径；Markdown 链接的目标按 Markdown 的规矩，相对所在文件的目录解析，
+// 这样在 GitHub、IDE 预览里点得开。开头是 `/` 的按仓库根解析（GitHub 的口径）。两种各按各的规矩校验，互不混用
+
+// 行内链接 `[文字](目标 "标题")`（文字里允许一层方括号，目标可以用尖括号包起来）和引用式定义 `[id]: 目标`。
+// 行内代码里的是示例，先抹掉
+const INLINE_LINK_RE = /\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*(<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+const LINK_DEF_RE = /^(\s{0,3}\[[^\]]+\]:[ \t]*)(<[^>\n]*>|\S+)/;
+const maskCode = (line) => line.replace(/(`+)[^`]*?\1/g, (s) => ' '.repeat(s.length));
+
+// 一行里的 Markdown 链接：[{ text, target, index, at }]。index 是链接（`[`）在行里的位置，at 是目标在行里的位置
+export function linksIn(line) {
+  if (!line.includes('](') && !line.includes(']:')) return [];
+  const masked = maskCode(line);
+  const out = [];
+  for (const m of masked.matchAll(INLINE_LINK_RE)) {
+    const at = m.index + m[0].indexOf(m[2], m[1].length + 3); // 跳过 `[文字](`
+    out.push({ text: line.slice(m.index + 1, m.index + 1 + m[1].length), target: line.slice(at, at + m[2].length), index: m.index, at });
+  }
+  const d = masked.match(LINK_DEF_RE);
+  if (d) out.push({ text: '', target: line.slice(d[1].length, d[1].length + d[2].length), index: line.search(/\S/), at: d[1].length });
+  return out;
+}
+
+// 把一行里的链接目标抹成空格（长度不变，下标照旧），纯文本指针的正则就不会把链接目标当成仓库根起的路径
+export function maskLinkTargets(line) {
+  let out = line;
+  for (const l of linksIn(line)) out = out.slice(0, l.at) + ' '.repeat(l.target.length) + out.slice(l.at + l.target.length);
+  return out;
+}
+
+// 链接目标里的文件路径：去掉尖括号、`#锚点`、`?查询`，解码 %20 这类转义。外链（带协议、`//` 开头）和纯锚点返回 null
+export function linkPath(target) {
+  let t = target.replace(/^<|>$/g, '');
+  if (/^[a-z][a-z\d+.-]*:/i.test(t) || t.startsWith('//')) return null;
+  t = t.replace(/[#?].*$/, '');
+  if (!t) return null;
+  try { t = decodeURI(t); } catch {}
+  return t;
+}
+
+// 链接目标解析成仓库根起的路径。file 是链接所在文件（仓库根起）。解析到仓库外、或不是文件路径的返回 null
+export function resolveLink(file, target) {
+  const t = linkPath(target);
+  if (t === null) return null;
+  const p = t.startsWith('/') ? path.posix.normalize(t.slice(1)) : path.posix.join(path.posix.dirname(file), t);
+  return !p || p === '.' || p.startsWith('../') || p === '..' ? null : p;
+}
+
+// 链接是不是指向文档目录里的 Markdown（含旧目录）：解析出来的路径落在文档目录里，或者目标里写了文档目录名。
+// 后一种是为了认出解析到别处去的链接（把仓库根起的路径写进链接目标，在子目录的文件里就会解析错）。dirs 默认含旧目录
+export function isDocLink(resolved, target, dirs = DOC_DIRS) {
+  const t = linkPath(target);
+  if (t === null || !MARKDOWN_RE.test(t)) return false;
+  return dirs.some((d) => (resolved !== null && segmentIndex(resolved, `${d}/`) !== -1) || segmentIndex(t.replace(/^\//, ''), `${d}/`) !== -1);
+}
+
 // 文档路径是不是在旧目录里
 export const isLegacyDoc = (p) => LEGACY_DOC_RE.test(p);
 

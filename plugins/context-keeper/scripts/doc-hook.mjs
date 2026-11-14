@@ -15,7 +15,8 @@ import { spawnSync } from 'node:child_process';
 import { langFor } from './lib/comments.mjs';
 import {
   ANY_POINTER_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_RE, LEGACY_ENTRY_RE, LEGACY_RENAME_HINT, MARKDOWN_RE,
-  commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, pointersIn, proseLines, resolvePointer,
+  commentLines, findRoot, inComment, isLegacyDoc, isPointerMarkdown, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
+  resolvePointer,
 } from './lib/pointers.mjs';
 import { stateFile } from './lib/state.mjs';
 
@@ -40,8 +41,9 @@ const doc = path.relative(root, file).split(path.sep).join('/');
 // 旧目录 `.context/` 里的文档也管：升级后、改名前提醒不中断
 if (DOC_RE.test(doc) ? ENTRY_RE.test(doc) : !LEGACY_DOC_RE.test(doc) || LEGACY_ENTRY_RE.test(doc)) process.exit(0);
 
-// 先用 git grep 筛出提到这个路径的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的）
-const r = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', '-e', doc], { cwd: root, encoding: 'utf8', timeout: 5000 });
+// 先用 git grep 筛出提到这个路径的文件（范围和 check.mjs 一致：已跟踪的加未跟踪、没被忽略的）。
+// Markdown 链接的目标是相对所在文件的路径（`../api/x.md`），不含完整路径，再按文件名筛一遍，下面逐行解析
+const r = spawnSync('git', ['grep', '-lIz', '--untracked', '-F', '-e', doc, '-e', path.posix.basename(doc)], { cwd: root, encoding: 'utf8', timeout: 5000 });
 if (r.error || r.status !== 0) process.exit(0); // 1 是没找到
 
 // 哪些文件里的路径算指针，和 check.mjs 同一套口径：rule、文档入口、CLAUDE.md、skill 里代码块外的行，
@@ -66,7 +68,9 @@ for (const f of r.stdout.split('\0').filter(Boolean)) {
   const comment = isMd ? null : commentLines(text.split(/\r?\n/)).comment;
   for (const [line, i] of proseLines(text, !isMd)) {
     // 路径只是另一个作用域里同名文档的后半截时，解析出来的不是这份文档
-    const hit = pointersIn(line, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc);
+    // Markdown 里纯文本路径按仓库根解析，链接目标按所在文件的目录解析
+    const hit = pointersIn(isMd ? maskLinkTargets(line) : line, ANY_POINTER_RE).find((raw) => resolvePointer(raw, exists) === doc)
+      || (isMd && linksIn(line).some((l) => resolveLink(f, l.target) === doc));
     if (!hit || (!isMd && !inComment(line, i, comment, hit))) continue;
     if (rows.length >= MAX_ROWS) { more++; continue; }
     const t = line.trim();

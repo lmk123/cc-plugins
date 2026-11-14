@@ -15,7 +15,8 @@ import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
   CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
-  commentLines, inComment, pointersIn, proseLines, resolvePointer as resolveWith, segmentIndex, TRIGGER_RE,
+  commentLines, inComment, isDocLink, linkPath, linksIn, maskLinkTargets, pointersIn, proseLines, resolveLink,
+  resolvePointer as resolveWith, segmentIndex, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
@@ -516,23 +517,42 @@ const MD_SOURCES = new Set([...claudeMds, ...rules, ...skills, ...entries, ...do
 const isPointerSource = (f) => MD_SOURCES.has(f) || !MARKDOWN_RE.test(f);
 // 一行是不是独立成行的注释（粗略，按常见注释前缀认）
 const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/;
-// 只读含 `context-docs/`（或旧版 `.context/`）的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
+// 源码只读含 `context-docs/`（或旧版 `.context/`）的：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存。
+// Markdown 来源（CLAUDE.md、rule、skill、文档、入口）不多，全读：入口和文档之间的相对链接（`models/x.md`）不带目录名，grep 筛不出来
 function filesMentioningContext() {
   if (IS_GIT) {
     const r = git(['grep', '-lIz', '--untracked', '-F', '-e', DOC_MARK, '-e', LEGACY_MARK]);
-    if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f) && isPointerSource(f));
+    if (r.status === 0 || r.status === 1) {
+      return [...MD_SOURCES, ...r.stdout.split('\0').filter((f) => FILE_SET.has(f) && isPointerSource(f) && !MD_SOURCES.has(f))];
+    }
   }
   return FILES.filter(isPointerSource);
 }
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
+// 一行 Markdown 里指向文档的链接，目标按所在文件 f 的目录解析：[{ text, target, index, at, resolved }]。旧目录的另算（legacyLinksIn）
+const docLinksIn = (f, line) => linksIn(line)
+  .map((l) => ({ ...l, resolved: resolveLink(f, l.target) }))
+  .filter((l) => isDocLink(l.resolved, l.target, [DOC_DIR]));
+// 一行里有没有指向文档的指针：纯文本的（链接目标抹掉之后再找）或链接。f 不是 Markdown 时只认纯文本的
+const hasPointer = (line, f) => (MD_SOURCES.has(f)
+  ? pointersIn(maskLinkTargets(line)).length > 0 || docLinksIn(f, line).length > 0
+  : pointersIn(line).length > 0);
+// 链接目标写成了仓库根起的路径（在子目录的文件里解析错了）：按仓库根找得到文件时，给出改好的相对路径
+function linkFix(f, target) {
+  const t = linkPath(target);
+  if (!t || t.startsWith('/')) return null;
+  const p = path.posix.normalize(t);
+  return pointerExists(p) ? path.posix.relative(path.posix.dirname(f), p) : null;
+}
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
 const toNewDir = (p) => {
   const i = segmentIndex(p, LEGACY_MARK);
   return i === -1 ? p : p.slice(0, i) + DOC_MARK + p.slice(i + LEGACY_MARK.length);
 };
 // 紧贴中文时前面的字会被并进第一段，按旧路径或改名后的路径找得到文件时去掉。
-// 返回 { raw, fixed }：找不到文件的 fixed 为 null，前面并进来的字去不掉，不给具体的新路径
+// 返回 { raw, fixed }：找不到文件的 fixed 为 null，前面并进来的字去不掉，不给具体的新路径。
+// 传进来的是抹掉链接目标的行，链接目标另由 legacyLinksIn 按所在文件的目录解析
 const legacyPointersIn = (line) => {
   const out = new Map();
   for (const raw of pointersIn(line, LEGACY_POINTER_RE)) {
@@ -541,6 +561,15 @@ const legacyPointersIn = (line) => {
   }
   return [...out].map(([raw, fixed]) => ({ raw, fixed }));
 };
+// 链接目标里写了旧目录名的（目标里没写、只是文件本身在旧目录里的相对链接，目录整个改名后照样有效，不报）。
+// 返回 { raw, fixed, doc }：doc 是改名后的文档路径（存在时），fixed 是改好的链接目标
+const legacyLinksIn = (f, line) => linksIn(line).flatMap((l) => {
+  const t = linkPath(l.target);
+  if (t === null || segmentIndex(t.replace(/^\//, ''), LEGACY_MARK) === -1 || !MARKDOWN_RE.test(t)) return [];
+  const p = resolveLink(f, l.target);
+  const doc = p && pointerExists(toNewDir(p)) ? toNewDir(p) : null;
+  return [{ raw: l.target, fixed: doc || (p && pointerExists(p)) ? toNewDir(l.target) : null, doc }];
+});
 // 旧版路径的提示：改名前 hook 照样认旧路径，但目录一改名旧路径就指不到文件了，hook 也跟着认不出来
 const legacyPointerMsg = (legacy) => {
   const fixes = legacy.map((x) => (x.fixed ? `${x.raw} → ${x.fixed}` : `${x.raw}（指不到文件，确认路径后把 \`${LEGACY_MARK}\` 换成 \`${DOC_MARK}\`）`));
@@ -577,6 +606,12 @@ function pathFirst(line, raw) {
   if (ENTRY_RE.test(raw)) return false;
   return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, line.indexOf(raw))))) && resolvePointer(raw) === raw;
 }
+// 链接打头的登记行同理：链接文字只是路径、文件名（`[x.md](…)`）或"文档"这类引导词时算路径打头；链接文字是标题时前面有话，不算
+function linkFirst(line, link) {
+  if (link.resolved && ENTRY_RE.test(link.resolved)) return false;
+  const text = link.text.replace(/`/g, '').trim();
+  return LEAD_IN_RE.test(wordsOf(stripItemMarks(line.slice(0, link.index)) + (MARKDOWN_RE.test(text) ? '' : text)));
+}
 // 折行的登记行，上一行是不是它的上半句（重点，或纯参考的"什么时候读"）：有话，而且不是标题、表格行、引言
 function carriesHead(prev) {
   return !LEAD_IN_RE.test(wordsOf(stripItemMarks(prev))) && !isLead(prev) && !mentionsDocsOnly(prev);
@@ -587,27 +622,27 @@ function carriesHead(prev) {
 // 表格只有表头和分隔行不算，不带指针的数据行是正文；分隔线（---）不算。代码块是正文：rule 里的代码示例就是"怎么做"
 const TABLE_SEP_RE = /^(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
 const HR_RE = /^([-*_])(?:\s*\1){2,}$/;
-function hasOwnContent(text) {
+function hasOwnContent(text, f) {
   const fm = parseFrontmatter(text);
   const lines = fm ? fm.body : text.split(/\r?\n/);
   let afterPointer = false;
   return lines.some((l, i) => {
     const t = l.trim();
     if (!t || HR_RE.test(t)) { afterPointer = false; return false; }
-    if (pointersIn(l).length) { afterPointer = true; return false; }
+    if (hasPointer(l, f)) { afterPointer = true; return false; }
     afterPointer = afterPointer && /^\s/.test(l) && !LIST_ITEM_RE.test(l);
     if (afterPointer) return false;
     if (t.startsWith('|')) return !TABLE_SEP_RE.test(t) && !TABLE_SEP_RE.test((lines[i + 1] || '').trim());
     if (!mentionsDocsOnly(l)) return carriesHead(l);
     const next = lines.slice(i + 1).find((x) => x.trim());
-    return !(next && pointersIn(next).length);
+    return !(next && hasPointer(next, f));
   });
 }
 for (const f of filesMentioningContext()) {
   const isMd = MD_SOURCES.has(f);
   const text = isMd ? read(f) : readRaw(f);
   const hasLegacy = !!text && text.includes(LEGACY_MARK);
-  if (!text || (!hasLegacy && !text.includes(DOC_MARK))) continue;
+  if (!text || (!hasLegacy && !text.includes(DOC_MARK) && !(isMd && /\]\(|\]:/.test(text)))) continue;
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
@@ -621,7 +656,7 @@ for (const f of filesMentioningContext()) {
   const known = isMd || langFor(f) !== null; // 失效指针和写法只在认得的文件里查
   const cm = isCode && known ? commentLines(text.split(/\r?\n/)).comment : null;
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
-  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text)));
+  const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text, f)));
   const register = (p) => {
     if (!fromDoc) referenced.add(p);
     if (isEntry) inEntry.add(p);
@@ -633,41 +668,64 @@ for (const f of filesMentioningContext()) {
   // 第三方、构建产物目录里的旧指针不是这个仓库写的，和旧目录一样不要求改
   const warnLegacy = known && !inSkipDir(f);
   prose.forEach(([line, i], k) => {
-    const legacy = hasLegacy ? legacyPointersIn(line) : [];
+    // Markdown 里纯文本路径按仓库根解析、链接目标按所在文件的目录解析，分开找：先把链接目标抹掉，纯文本的正则就看不到它
+    const scan = isMd ? maskLinkTargets(line) : line;
+    const legacy = hasLegacy ? legacyPointersIn(scan) : [];
     // 目录已经改名、只是指针漏改的，按新路径登记：同一份文档不再另报孤儿、缺索引，只报下面这条旧版路径
     for (const x of legacy) if (x.fixed && pointerExists(x.fixed)) register(x.fixed);
-    const stale = warnLegacy ? legacy.filter((x) => isMd || inComment(line, i, cm, x.raw)) : [];
+    const legacyLinks = hasLegacy && isMd ? legacyLinksIn(f, line) : [];
+    for (const x of legacyLinks) if (x.doc) register(x.doc);
+    const stale = warnLegacy ? [...legacy.filter((x) => isMd || inComment(line, i, cm, x.raw)), ...legacyLinks] : [];
     if (stale.length) add('warn', 'pointer', f, legacyPointerMsg(stale), i + 1);
-    const found = pointersIn(line);
-    if (!found.length) return;
+    const found = pointersIn(scan);
+    const links = isMd ? docLinksIn(f, line) : [];
+    if (!found.length && !links.length) return;
     const strict = known && (isMd || inComment(line, i, cm, found[0]));
     // 只删指针路径本身：中文正文和路径之间往往没有空格，按"删到下一个空白为止"会把后面的触发条件一起删掉
-    let own = line;
+    let own = scan;
     for (const raw of found) own = own.split(raw).join('');
     // 指针折行时"什么时候读"可能写在上一行。上一行自己带指针、这一行是新的列表项、或（源码里）上一行不是注释时，
     // 上一行是另一回事，不借它的：代码行里的 `if` 之类会被当成触发条件
     const prev = k > 0 ? prose[k - 1][0] : '';
     const separate = isMd ? LIST_ITEM_RE.test(line) : !(cm && k > 0 && cm[prose[k - 1][1]]);
-    const folded = !separate && !pointersIn(prev).length; // 这一行接着上一行写
+    const folded = !separate && !hasPointer(prev, f); // 这一行接着上一行写
     const near = folded ? `${prev}\n${own}` : own;
     // 折行的登记行，重点在上一行时，路径打头不算没写重点
     const headAbove = folded && carriesHead(prev);
     if (strict && !fromDoc && !TRIGGER_RE.test(near)) {
       add('info', 'pointer-style', f, '指针没写什么时候读：改成「重点 + 什么时候读 + 路径」，比如"改重试次数前读 …"，Claude 才判断得了要不要读', i + 1);
-    } else if (bareLines && !headAbove && pathFirst(line, found[0])) {
+    } else if (bareLines && !headAbove && (links.length && (!found.length || links[0].index < scan.indexOf(found[0]))
+      ? linkFirst(line, links[0])
+      : pathFirst(scan, found[0]))) {
       add('info', 'pointer-style', f, '登记行以路径开头，路径前面没有重点：只有路径和什么时候读的行进了 context 等于什么都没给，Claude 要读完整份文档才拿得到重点。把文档里不知道就会做错的结论写在路径前面（「重点 + 什么时候读 + 路径」），已经写在路径后面的挪到前面；文档里没有这类结论的，改成以"什么时候读"开头', i + 1);
     }
     for (const raw of found) {
       const p = resolvePointer(raw);
       if (p) register(p);
       else if (strict) {
-        add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（指针一律写仓库根起的路径）`, i + 1);
+        add('error', 'pointer', f, `指针指向不存在的文件 ${raw}（纯文本指针写仓库根起的路径；Markdown 链接的目标另按所在文件的目录解析）`, i + 1);
       }
+    }
+    for (const l of links) {
+      if (l.resolved && pointerExists(l.resolved)) {
+        register(l.resolved);
+        // 链接文字里也写了路径的，两边要指向同一份文档：改了一边忘了另一边，点开的和 grep 到的就不是一份了
+        for (const raw of pointersIn(l.text)) {
+          const p = resolvePointer(raw);
+          if (p && p !== l.resolved) add('error', 'pointer', f, `链接文字写的 ${raw} 和链接目标 ${l.target}（解析为 ${l.resolved}）不是同一份文档：两边改成一致`, i + 1);
+        }
+        continue;
+      }
+      if (!strict) continue;
+      const fix = linkFix(f, l.target);
+      add('error', 'pointer', f, fix
+        ? `链接目标 ${l.target} 写成了仓库根起的路径：Markdown 链接按所在文件的目录解析，现在点开是 404。改成 ${fix}`
+        : `链接指向不存在的文件 ${l.target}（Markdown 链接的目标按所在文件的目录解析，开头是 / 的按仓库根解析）`, i + 1);
     }
   });
 }
 for (const d of docs) {
-  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码以仓库根起的路径指到，不会被读到。能挂到代码上的先看能不能并回原处，不能就在相关代码的注释或 rule 里留指针、或登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
+  if (!referenced.has(d)) add('warn', 'orphan', d, `孤儿文档：没有登记在任何入口，也没有被 rule、CLAUDE.md 或代码指到，不会被读到。能挂到代码上的先看能不能并回原处，不能就在相关代码的注释或 rule 里留指针、或登记进领域索引 rule；挂不到的登记进 ${ENTRY}`);
 }
 for (const e of entries) {
   if (!fromRootClaude.has(e)) add('warn', 'entry', e, '文档入口没被根 CLAUDE.md 指到：挂不到代码上的文档在做新需求时不会被看到；在根 CLAUDE.md「更多上下文」里写上这个路径');

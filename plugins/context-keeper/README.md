@@ -164,4 +164,12 @@ git mv .context context-docs
 
 改完在整个仓库 grep `.context/`，把注释、rule、CLAUDE.md、skill 和文档里的旧路径换成 `context-docs/`。
 
+0.8.1：Markdown 链接的目标改按所在文件的目录解析。原来规范要求指针一律写仓库根起的路径，整理时连 Markdown 链接的目标也改成了仓库根起的路径，在 GitHub 和 IDE 预览里点开全是 404，检查脚本却不报；改回相对路径，脚本反而报失效。
+
+- 规范：纯文本路径（注释里的、反引号包住的）照旧从仓库根写起；Markdown 链接的目标写所在文件起的相对路径，开头是 `/` 的按仓库根解析。`organize-context` 不再把有效的相对链接改写成仓库根起的路径
+- 检查脚本：链接目标按所在文件的目录解析。写成仓库根起的路径、点开是 404 的报错误，并给出改好的相对路径；链接文字里也写了路径、和链接目标指向不同文档的报错误。文档入口和文档之间不带目录名的相对链接（`models/x.md`、`../api/x.md`）也校验、也算登记
+- doc-hook：指到这份文档的相对链接也列出来
+
+升级后跑一次检查脚本：0.8.0 整理时改坏的链接会逐条报出来，按提示改回相对路径，或者跑 `organize-context` 批量改。
+
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。

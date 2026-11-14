@@ -146,3 +146,13 @@ test('改名前改了旧目录 .context/ 里的文档，照样列出指到它的
   assert.match(msg, /- src\/api\/retry\.ts:1/);
   assert.match(msg, /organize-context/);
 });
+
+test('相对链接指到这份文档的也列出来，解析到别处的同名文件不列', () => {
+  const msg = docHook(makeRepo({
+    ...REPO,
+    'context-docs/README.md': '# 项目文档入口\n\n- 网关连续 5 次失败封 IP。评估限流方案前读 [重试](api/retry-policy.md)\n- 另一份：[同名](other/retry-policy.md)\n',
+    'context-docs/other/retry-policy.md': '# 别的\n',
+  }), { file: DOC });
+  assert.match(msg, /- context-docs\/README\.md:3 {2}- 网关连续 5 次失败封 IP/);
+  assert.doesNotMatch(msg, /README\.md:4/);
+});
