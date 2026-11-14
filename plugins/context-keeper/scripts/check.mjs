@@ -14,8 +14,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor } from './lib/comments.mjs';
 import {
-  CLAUDE_MD_RE, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, RULE_RE, SKILL_RE,
-  commentLines, inComment, pointersIn, proseLines, resolvePointer as resolveWith, TRIGGER_RE,
+  CLAUDE_MD_RE, DOC_DIR, DOC_RE, ENTRY_RE, LEGACY_DOC_DIR, LEGACY_POINTER_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_RE,
+  commentLines, inComment, pointersIn, proseLines, resolvePointer as resolveWith, segmentIndex, TRIGGER_RE,
 } from './lib/pointers.mjs';
 
 const argv = process.argv.slice(2);
@@ -107,10 +107,12 @@ const add = (level, category, file, msg, line) => {
 
 // ---------- 分类 ----------
 
-// RULE_RE、DOC_RE、ENTRY_RE、CLAUDE_MD_RE、SKILL_RE 在 lib/pointers.mjs 里，和 doc-hook 共用。DOC_RE 区分大小写，和 markerIndex 口径一致
+// RULE_RE、DOC_RE、ENTRY_RE、CLAUDE_MD_RE、SKILL_RE 在 lib/pointers.mjs 里，和 doc-hook 共用。DOC_RE 区分大小写，和 segmentIndex 口径一致
 // 提示文字里的入口路径拆开写，免得脚本复制进项目后把它当成失效指针
-const ENTRY = ['context-docs', 'README.md'].join('/');
-const LEGACY_ENTRY = ['.context', 'README.md'].join('/'); // 0.7.x 及更早的文档入口
+const DOC_MARK = `${DOC_DIR}/`;
+const LEGACY_MARK = `${LEGACY_DOC_DIR}/`;
+const ENTRY = [DOC_DIR, 'README.md'].join('/');
+const LEGACY_ENTRY = [LEGACY_DOC_DIR, 'README.md'].join('/'); // 0.7.x 及更早的文档入口
 const ROOT_CLAUDE_MD = new Set(['CLAUDE.md', '.claude/CLAUDE.md']);
 const INDEX_RULE_RE = /(^|\/)\.claude\/rules\/[^/]+\/context-index\.md$/;
 const RULE_MAX_LINES = 10;
@@ -121,12 +123,10 @@ const docs = FILES.filter((f) => DOC_RE.test(f) && !ENTRY_RE.test(f));
 const claudeMds = FILES.filter((f) => CLAUDE_MD_RE.test(f));
 const skills = FILES.filter((f) => SKILL_RE.test(f));
 
-// marker 作为完整的目录名出现的第一个位置（开头或紧跟 `/`）：`request-context-docs/` 这类目录名里的 `context-docs/` 不算
-function markerIndex(f, marker) {
-  for (let i = f.indexOf(marker); i !== -1; i = f.indexOf(marker, i + 1)) if (i === 0 || f[i - 1] === '/') return i;
-  return -1;
-}
-const scopeOf = (f, marker) => f.slice(0, markerIndex(f, marker));
+// marker 作为完整的目录名出现的第一个位置（segmentIndex）：`request-context-docs/` 这类目录名里的 `context-docs/` 不算
+const scopeOf = (f, marker) => f.slice(0, segmentIndex(f, marker));
+// 第三方、构建产物目录（node_modules、vendor 等）下的旧版文档目录不是这个仓库的，不要求改名
+const inSkipDir = (f) => f.split('/').some((s) => SKIP_DIRS.has(s));
 const scopeFilesCache = new Map();
 function scopeFiles(scope) {
   if (!scopeFilesCache.has(scope)) scopeFilesCache.set(scope, FILES.filter((f) => f.startsWith(scope)).map((f) => f.slice(scope.length)));
@@ -429,8 +429,8 @@ for (const f of claudeMds) {
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const domainsWithDocs = new Map(); // `${scope}|${domain}` -> [docs]
 for (const d of docs) {
-  const scope = scopeOf(d, 'context-docs/');
-  const rel = d.slice(scope.length + 'context-docs/'.length);
+  const scope = scopeOf(d, DOC_MARK);
+  const rel = d.slice(scope.length + DOC_MARK.length);
   const segs = rel.split('/');
   const name = segs[segs.length - 1];
   if (segs.length > 2) add('warn', 'doc', d, '领域目录嵌套了：`context-docs/` 下只分一层领域目录');
@@ -448,30 +448,44 @@ for (const d of docs) {
 
 // 两路：一是磁盘上已经存在、但被忽略的 `context-docs/`、`.claude/`（被忽略的文件不在 ls-files 里，上面的分类看不到它们）；
 // 二是按根和已有 `.claude/`、`context-docs/` 的位置探一下写进去会不会被忽略。
+// 旧版 `.context/` 所在的目录也算作用域：改名之后文档就落在那里的 `context-docs/`，要提前知道会不会被忽略。
 // `.claude/` 下只探 rules/ 和 skills/：settings.local.json 之类本来就该被忽略。
 // 目录级 CLAUDE.md 所在目录不是作用域，不探。
 const scopes = new Set(['']);
 const ignoredLegacyDirs = new Set(); // 被忽略的旧版文档目录：里面的文件不在 ls-files 里，下面按文件找旧目录时看不到
+// 目录里（往下两层，对应 <领域>/<slug>.md）有没有 Markdown：被忽略的 `.context/` 也可能是别的工具的缓存目录
+function hasMarkdown(dir, depth = 2) {
+  try {
+    return fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).some((e) => (e.isFile() && e.name.endsWith('.md'))
+      || (e.isDirectory() && depth > 1 && hasMarkdown(`${dir}${e.name}/`, depth - 1)));
+  } catch {
+    return false;
+  }
+}
 if (IS_GIT) {
   const r = git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']);
   for (const p of r.stdout.split('\0').filter(Boolean)) {
     const segs = p.replace(/\/$/, '').split('/');
+    // 只认目录：`--directory` 给出的目录带结尾的 `/`，或者是目录下的文件。被忽略的同名普通文件不算
     const legacy = segs.indexOf(LEGACY_DOC_DIR);
-    if (legacy !== -1 && !segs.includes('node_modules')) ignoredLegacyDirs.add(segs.slice(0, legacy + 1).map((x) => `${x}/`).join(''));
-    const k = segs.findIndex((x) => x === 'context-docs' || x === '.claude');
+    if (legacy !== -1 && (legacy < segs.length - 1 || p.endsWith('/'))) {
+      const dir = segs.slice(0, legacy + 1).map((x) => `${x}/`).join('');
+      if (!inSkipDir(dir) && hasMarkdown(dir)) ignoredLegacyDirs.add(dir);
+    }
+    const k = segs.findIndex((x) => x === DOC_DIR || x === LEGACY_DOC_DIR || x === '.claude');
     if (k !== -1) scopes.add(segs.slice(0, k).map((x) => `${x}/`).join(''));
   }
 }
-// 已有 `.claude/`（哪怕只有 settings.json）或 `context-docs/` 的目录都当作作用域探一下
+// 已有 `.claude/`（哪怕只有 settings.json）、`context-docs/` 或旧版 `.context/` 的目录都当作作用域探一下
 for (const f of FILES) {
-  for (const marker of ['.claude/', 'context-docs/']) {
-    const i = markerIndex(f, marker);
+  for (const marker of ['.claude/', DOC_MARK, LEGACY_MARK]) {
+    const i = segmentIndex(f, marker);
     if (i !== -1) { scopes.add(f.slice(0, i)); break; }
   }
 }
 // 拆开写，免得脚本复制进项目后把这里当成失效指针
 const PROBES = [
-  { dir: 'context-docs/', probe: ['context-docs', '__probe__.md'].join('/'), category: 'context-dir', msg: '`context-docs/` 被 .gitignore 忽略了，文档进不了仓库：调整 .gitignore 后再往里写' },
+  { dir: DOC_MARK, probe: [DOC_DIR, '__probe__.md'].join('/'), category: 'context-dir', msg: '`context-docs/` 被 .gitignore 忽略了，文档进不了仓库：调整 .gitignore 后再往里写' },
   { dir: '.claude/rules/', probe: '.claude/rules/__probe__.md', category: 'claude-dir', msg: '`.claude/rules/` 被 .gitignore 忽略了：rule 进不了仓库，队友看不到，本脚本也检查不到里面的文件。调整 .gitignore（比如只忽略 `.claude/settings.local.json`）后再往里写' },
   { dir: '.claude/skills/', probe: '.claude/skills/__probe__/SKILL.md', category: 'claude-dir', msg: '`.claude/skills/` 被 .gitignore 忽略了：skill 进不了仓库，队友看不到。调整 .gitignore 后再往里写' },
 ];
@@ -499,7 +513,7 @@ const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--|;|%)/;
 // 只读含 `context-docs/`（或旧版 `.context/`）的文件：git 仓库里先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
 function filesMentioningContext() {
   if (IS_GIT) {
-    const r = git(['grep', '-lIz', '--untracked', '-F', '-e', 'context-docs/', '-e', '.context/']);
+    const r = git(['grep', '-lIz', '--untracked', '-F', '-e', DOC_MARK, '-e', LEGACY_MARK]);
     if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f) && isPointerSource(f));
   }
   return FILES.filter(isPointerSource);
@@ -507,10 +521,25 @@ function filesMentioningContext() {
 const pointerExists = (p) => FILE_SET.has(p) || fs.existsSync(path.join(ROOT, p));
 const resolvePointer = (p) => resolveWith(p, pointerExists);
 // 0.7.x 及更早的指针写的是点开头的旧目录：本脚本不再按指针检查它，目录改名后漏改的会静默失效，单独报出来
-const toNewDir = (p) => p.replace(/(^|\/)\.context\//, '$1context-docs/');
-// 紧贴中文时前面的字会被并进第一段，按旧路径或改名后的路径找得到文件时去掉
-const legacyPointersIn = (line) => [...new Set(pointersIn(line, LEGACY_POINTER_RE)
-  .map((raw) => resolveWith(raw, (q) => pointerExists(q) || pointerExists(toNewDir(q))) || raw))];
+const toNewDir = (p) => {
+  const i = segmentIndex(p, LEGACY_MARK);
+  return i === -1 ? p : p.slice(0, i) + DOC_MARK + p.slice(i + LEGACY_MARK.length);
+};
+// 紧贴中文时前面的字会被并进第一段，按旧路径或改名后的路径找得到文件时去掉。
+// 返回 { raw, fixed }：找不到文件的 fixed 为 null，前面并进来的字去不掉，不给具体的新路径
+const legacyPointersIn = (line) => {
+  const out = new Map();
+  for (const raw of pointersIn(line, LEGACY_POINTER_RE)) {
+    const p = resolveWith(raw, (q) => pointerExists(q) || pointerExists(toNewDir(q)));
+    if (!out.has(p || raw)) out.set(p || raw, p ? toNewDir(p) : null);
+  }
+  return [...out].map(([raw, fixed]) => ({ raw, fixed }));
+};
+// 旧版路径的提示：改名前 hook 照样认旧路径，但目录一改名旧路径就指不到文件了，hook 也跟着认不出来
+const legacyPointerMsg = (legacy) => {
+  const fixes = legacy.map((x) => (x.fixed ? `${x.raw} → ${x.fixed}` : `${x.raw}（指不到文件，确认路径后把 \`${LEGACY_MARK}\` 换成 \`${DOC_MARK}\`）`));
+  return `旧版路径：0.8.0 起文档目录改名为 \`${DOC_MARK}\`，改成新路径：${fixes.join('、')}。目录改名之后旧路径就指不到文件了，pointer-guard 和 doc-hook 也不再认这些指针`;
+};
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/; // 新的列表项
 const stripItemMarks = (s) => s.replace(/^\s*(?:>\s*)+/, '').replace(LIST_ITEM_RE, '').replace(/^\[[ xX]\]\s+/, '');
 // 下面几个判断都是机械的：只看路径前面（或折行时的上一行）有没有话，不判断那句话是文档标题还是重点。
@@ -571,7 +600,8 @@ function hasOwnContent(text) {
 for (const f of filesMentioningContext()) {
   const isMd = MD_SOURCES.has(f);
   const text = isMd ? read(f) : readRaw(f);
-  if (!text || (!text.includes('context-docs/') && !text.includes('.context/'))) continue;
+  const hasLegacy = !!text && text.includes(LEGACY_MARK);
+  if (!text || (!hasLegacy && !text.includes(DOC_MARK))) continue;
   const fromDoc = DOC_RE.test(f) && !ENTRY_RE.test(f);
   const isEntry = ENTRY_RE.test(f);
   const isRootClaude = ROOT_CLAUDE_MD.has(f);
@@ -587,10 +617,8 @@ for (const f of filesMentioningContext()) {
   // 文档入口和领域索引 rule 的每一行都是登记行；别的 rule 只在正文除了指针没有别的话时才查
   const bareLines = isEntry || (isRule && (INDEX_RULE_RE.test(f) || !hasOwnContent(text)));
   prose.forEach(([line, i], k) => {
-    const legacy = known ? legacyPointersIn(line) : [];
-    if (legacy.length && (isMd || inComment(line, i, cm, legacy[0]))) {
-      add('warn', 'pointer', f, `旧版路径 ${legacy.join('、')}：0.8.0 起文档目录改名为 \`context-docs/\`，改成 ${legacy.map(toNewDir).join('、')}（旧路径的指针 pointer-guard 和 doc-hook 都认不出来）`, i + 1);
-    }
+    const legacy = known && hasLegacy ? legacyPointersIn(line).filter((x) => isMd || inComment(line, i, cm, x.raw)) : [];
+    if (legacy.length) add('warn', 'pointer', f, legacyPointerMsg(legacy), i + 1);
     const found = pointersIn(line);
     if (!found.length) return;
     const strict = known && (isMd || inComment(line, i, cm, found[0]));
@@ -652,8 +680,12 @@ const legacyDirs = new Set();
 for (const f of FILES) {
   if (!f.endsWith('.md')) continue;
   const inNodeModules = /(^|\/)node_modules\//.test(f);
-  const legacy = inNodeModules ? -1 : markerIndex(f, '.context/');
-  if (legacy !== -1) { legacyDirs.add(f.slice(0, legacy + '.context/'.length)); continue; }
+  const legacy = segmentIndex(f, LEGACY_MARK);
+  if (legacy !== -1) {
+    const dir = f.slice(0, legacy + LEGACY_MARK.length);
+    if (!inSkipDir(dir)) legacyDirs.add(dir);
+    continue;
+  }
   if (CLAUDE_MD_RE.test(f)) continue;
   if (/(^|\/)\.claude\//.test(f) && !CLAUDE_OWN.test(f)) {
     add('warn', 'misplaced', f, '文档放在 `.claude/` 下：迁到所属作用域的 `context-docs/<领域>/<slug>.md`');
@@ -662,18 +694,18 @@ for (const f of FILES) {
   }
 }
 for (const d of legacyDirs) {
-  add('warn', 'misplaced', d, `旧版文档目录：0.8.0 起改名为 \`${d.slice(0, -'.context/'.length)}context-docs/\`（点开头的目录 rg、Grep 默认不搜）。用 git mv 整个改名，再把整个仓库里指向旧路径的指针一并改掉`);
+  add('warn', 'misplaced', d, `旧版文档目录：0.8.0 起改名为 \`${d.slice(0, -LEGACY_MARK.length)}${DOC_MARK}\`（点开头的目录 rg、Grep 默认不搜）。用 git mv 整个改名，再把整个仓库里指向旧路径的指针一并改掉`);
 }
 for (const d of ignoredLegacyDirs) {
   if (legacyDirs.has(d)) continue;
-  add('warn', 'misplaced', d, `旧版文档目录，而且被 .gitignore 忽略了：0.8.0 起改名为 \`${d.slice(0, -'.context/'.length)}context-docs/\`。里面的文档要进仓库的话，改名后调整 .gitignore 让新目录能进 git，再把整个仓库里指向旧路径的指针一并改掉；是不是只当本地草稿，交给用户决定`);
+  add('warn', 'misplaced', d, `旧版文档目录，而且被 .gitignore 忽略了：0.8.0 起改名为 \`${d.slice(0, -LEGACY_MARK.length)}${DOC_MARK}\`。里面的文档要进仓库的话，改名后调整 .gitignore 让新目录能进 git，再把整个仓库里指向旧路径的指针一并改掉；是不是只当本地草稿，交给用户决定`);
 }
 
 // ---------- 注释候选 ----------
 
 if (WANT_COMMENTS) {
   for (const f of FILES) {
-    if (!inScope(f) || !langFor(f) || /(^|\/)(context-docs|\.claude)\//.test(f)) continue;
+    if (!inScope(f) || !langFor(f) || NOT_CODE_DIR_RE.test(f)) continue;
     if (f.split('/').some((s) => SKIP_DIRS.has(s))) continue;
     const text = readRaw(f);
     if (!text) continue;

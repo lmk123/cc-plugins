@@ -124,6 +124,13 @@ test('领域目录名以 context-docs 结尾时，读了别的同名文档不算
   assert.equal(guard(t, { ...edit, session: 'own', transcript: [own, result('t2')] }), null);
 });
 
+test('Bash 里用重定向读过也算读过', () => {
+  const t = repoWith({ 'src/retry.ts': RETRY_TS });
+  const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };
+  const cat = use('t1', 'Bash', { command: `head -20 <${DOC}` });
+  assert.equal(guard(t, { ...edit, session: 'redir', transcript: [cat, result('t1')] }), null);
+});
+
 test('不算读过：读失败、结果还没回来、Bash 里只是提到路径', () => {
   const t = repoWith({ 'src/retry.ts': RETRY_TS });
   const edit = { file: 'src/retry.ts', old: 'const MAX_RETRY = 3;' };

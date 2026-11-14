@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
-  ANY_POINTER_RE, DOC_DIR, LEGACY_DOC_DIR, MARKDOWN_RE, commentLines, findRoot, isLegacyDoc, pointersIn, resolvePointer,
+  ANY_POINTER_RE, DOC_DIRS, MARKDOWN_RE, NOT_CODE_DIR_RE, commentLines, findRoot, isLegacyDoc, pointersIn, resolvePointer, segmentIndex,
 } from './lib/pointers.mjs';
 import { stateFile as stateFileFor } from './lib/state.mjs';
 
@@ -50,7 +50,7 @@ if (MARKDOWN_RE.test(file)) process.exit(0);
 // 文件不在它下面就不管
 const root = findRoot(file, process.env.CLAUDE_PROJECT_DIR || input.cwd);
 if (!root) process.exit(0);
-if (/(^|[\\/])(context-docs|\.context|\.claude|node_modules)([\\/])/.test(path.relative(root, file))) process.exit(0);
+if (NOT_CODE_DIR_RE.test(path.relative(root, file))) process.exit(0);
 
 const lf = (s) => s.replace(/\r\n?/g, '\n');
 let text;
@@ -257,24 +257,19 @@ if (!todo.length) process.exit(0);
 // `git add`、`ls`、`rm` 这类命令里提到路径不算读。
 // 压缩之后原文已经不在 context 里，压缩点之前的不算。文档读过之后，指向它的每一处指针都不再拦
 // 按完整的目录名找最后一个文档目录段：领域目录叫 `user-context-docs/` 时不能从它中间截
-const DOC_DIRS = [DOC_DIR, LEGACY_DOC_DIR];
 const tailOf = (p) => {
   const segs = p.split('/');
   let k = segs.length - 1;
   while (k > 0 && !DOC_DIRS.includes(segs[k])) k--;
   return segs.slice(k).join('/');
 };
-// s 里提到 tail，且前面是开头、空白、引号、`/` 或 `=`：`user-context-docs/…` 不算提到 `context-docs/…`
-const mentions = (s, tail) => {
-  for (let i = s.indexOf(tail); i !== -1; i = s.indexOf(tail, i + 1)) if (i === 0 || /[\s'"`/=]/.test(s[i - 1])) return true;
-  return false;
-};
 const unread = new Set(todo.map((x) => x.doc));
 const seen = new Set();
 const pending = new Map(); // tool_use 的 id -> 它读的文档，等对应的 tool_result
 const READ_CMDS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'nl']);
 const bashReads = (cmd, tail) => cmd.split(/&&|\|\||[;|\n]/).some((seg) => {
-  if (!mentions(seg, tail)) return false;
+  // 前面紧贴的是路径名字符时不算提到：`user-context-docs/…` 不算提到 `context-docs/…`；`cat <…`、`$(<…)` 照样算
+  if (segmentIndex(seg, tail, true) === -1) return false;
   const words = seg.trim().split(/\s+/);
   while (words.length && /^\w+=/.test(words[0])) words.shift(); // FOO=bar cat …
   const name = path.basename(words[0] || '');

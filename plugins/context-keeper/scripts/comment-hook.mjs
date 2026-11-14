@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findCommentBlocks } from './lib/comments.mjs';
+import { NOT_CODE_DIR_RE } from './lib/pointers.mjs';
 
 if (process.env.CONTEXT_KEEPER_COMMENT_HOOK === '0') process.exit(0);
 
@@ -34,7 +35,7 @@ function projectRelative(abs) {
   return rel.startsWith('..') || path.isAbsolute(rel) ? path.basename(abs) : rel;
 }
 const rel = projectRelative(path.resolve(input.cwd || process.cwd(), file));
-if (/(^|[\\/])(context-docs|\.context|\.claude|node_modules)([\\/])/.test(rel)) process.exit(0);
+if (NOT_CODE_DIR_RE.test(rel)) process.exit(0);
 
 // 统一成 \n，CRLF 文件里行号才对得上
 const lf = (s) => s.replace(/\r\n?/g, '\n');

@@ -361,3 +361,36 @@ test('被 .gitignore 忽略的旧版 .context/ 目录也报出来', () => {
   assert.deepEqual(legacy.map((f) => f.file), ['.context/']);
   assert.match(legacy[0].msg, /\.gitignore/);
 });
+
+test('被忽略的同名文件、别的工具的缓存目录、vendor 下的 .context/ 都不算旧版文档目录', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    '.gitignore': '.context\npkg/.context/\n',
+    '.context': 'some tool state\n',
+    'pkg/.context/cache.json': '{}\n',
+    [['vendor/lib', '.context', 'api/x.md'].join('/')]: '# 第三方\n',
+  }));
+  assert.ok(!r.findings.some((f) => /旧版文档目录/.test(f.msg)), JSON.stringify(r.findings));
+});
+
+test('只有旧版 .context/ 的子包也探一下 context-docs/ 会不会被忽略', () => {
+  const r = check(makeRepo({
+    ...CLEAN,
+    'packages/api/.gitignore': 'context-docs/\n',
+    [['packages/api', '.context', 'api/x.md'].join('/')]: '# 旧\n',
+  }));
+  assert.ok(r.findings.some((f) => f.category === 'context-dir' && f.file === 'packages/api/context-docs/'), JSON.stringify(r.findings));
+});
+
+test('--comments 不扫旧版 .context/ 里的代码文件', () => {
+  const r = check(makeRepo({ ...CLEAN, [['.context', 'api/sample.ts'].join('/')]: '// 以前是 5 次\n// 后来出了事故\n// 试过熔断\n// 放弃了\nconst A = 1;\n' }), ['--comments']);
+  assert.ok(!r.findings.some((f) => f.category === 'comment-block'), JSON.stringify(r.findings));
+});
+
+test('旧版路径指不到文件时，不给拼上中文前缀的新路径', () => {
+  const r = check(makeRepo({ ...CLEAN, 'src/api/b.ts': `// 改 B 前读见包/${['.context', 'api/gone.md'].join('/')}\nconst B = 1;\n` }));
+  const legacy = r.findings.find((f) => f.category === 'pointer' && /旧版路径/.test(f.msg));
+  assert.ok(legacy, JSON.stringify(r.findings));
+  assert.ok(!/见包\/context-docs/.test(legacy.msg), legacy.msg);
+  assert.match(legacy.msg, /指不到文件/);
+});
