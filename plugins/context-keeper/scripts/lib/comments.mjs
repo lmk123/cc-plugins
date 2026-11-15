@@ -1,5 +1,6 @@
-// 找出源码里"独立成段的长注释块"和带信号词的注释行，供 check.mjs 和 comment-hook.mjs 共用。
-// 只认独立成行的注释，行尾注释、/*! license 块，以及各语言的 API 文档注释一律跳过：
+// 源码注释的识别，供 check.mjs 和 comment-hook.mjs 共用：各语言的注释语法（langFor）、
+// 逐行扫描出注释和跨行字符串的位置（scanSource），以及在它上面找"独立成段的长注释块"和带信号词的注释行。
+// 找长注释块和信号词时只认独立成行的注释，行尾注释、/*! license 块，以及各语言的 API 文档注释一律跳过：
 // JSDoc/TSDoc（/**）、Rust/C#/Swift/Dart 的 /// 和 //!，Go / Ruby 紧贴在声明前的行注释。
 
 import path from 'node:path';
@@ -12,7 +13,8 @@ const MARKUP = { line: ['//'], block: true, html: true };
 const JS = { ...SLASH, strings: ['`'] };
 const TEXT_BLOCK = { ...SLASH, strings: ['"""'] };
 const DART = { ...SLASH, strings: ['"""', "'''"] };
-const PY = { ...HASH, strings: ['"""', "'''"] };
+// docstring：行首的三引号字符串是文档，算注释
+const PY = { ...HASH, strings: ['"""', "'''"], docstring: true };
 // Go 和 Ruby 没有专门的文档注释语法，紧贴在声明前的行注释就是文档
 const GO = { ...SLASH, strings: ['`'], docBefore: /^(package|func|type|var|const)\b/ };
 const SEMI = { line: [';'], block: false, html: false };
@@ -28,7 +30,7 @@ const LANGS = {
   py: PY, rb: RUBY, sh: HASH, bash: HASH, zsh: HASH, fish: HASH, pl: HASH, r: HASH,
   yaml: HASH, yml: HASH, toml: HASH, ex: HASH, exs: HASH, nim: HASH, cr: HASH, tf: HASH,
   sql: DASH, lua: DASH, hs: DASH,
-  // 不是编程语言、但能写注释的常见格式：指针写在这些文件的注释里也要认
+  // 不是编程语言、但能写注释的常见格式：这些文件里的长注释也要扫
   proto: SLASH, prisma: SLASH, sol: SLASH, jsonc: SLASH, json5: SLASH,
   graphql: { ...HASH, strings: ['"""'] }, gql: { ...HASH, strings: ['"""'] },
   hcl: { line: ['#', '//'], block: true, html: false },
@@ -74,46 +76,105 @@ function commentBody(t, prefixes, idx) {
   return null;
 }
 
-// 落在跨行字符串（Python 三引号、JS 模板字符串、Go 原始字符串等）里的行下标。
-// 只按分隔符粗略配对：整行是注释的行不参与配对，反斜杠转义下一个字符；
-// 跨行字符串外的单行字符串（'…'、"…"）整段跳过，碰到行尾注释就不再看这一行，
-// 连续两个以上的单字符分隔符（'```' 这类 Markdown 围栏）不算分隔符，免得把后面整份文件都当成字符串。
-function stringLines(lines, lang) {
-  const inside = new Set();
-  if (!lang.strings) return inside;
-  let open = null;
+// ---------- 逐行扫描 ----------
+// 一份源码只扫一遍，哪里是注释、哪里是字符串都从这里取：长注释块、信号词，以及 check.mjs 判断旧版文档的路径
+// 是写在注释里（写给人看的指针）还是写在可执行的行里（命令参数、字符串、配置值），用的是同一份结果。
+//   spans[k]  第 k 行里的注释区间 [[from, to), …]：行注释（独立成行或行尾）、块注释、HTML 注释、docstring
+//   str       开头落在跨行字符串（Python 三引号、JS 模板字符串、Go 原始字符串等）里的行下标
+//   blocks    收了尾的块注释和 HTML 注释 [{ mark, start, end, col }]：start、end 是 0 起的行下标，col 是开头在 start 行里的位置
+// 按 lang（langFor 的结果）的注释语法认：`--exclude x`、`**/x` 这类行在不拿 `--`、`*` 当注释符的语言里不是注释。
+// 扩展名表里没有的文件（.env.example、Caddyfile、各种 ignore 文件）只认 `#` 和 `//`。
+// 只按分隔符粗略配对：
+// - 反斜杠转义下一个字符。单行字符串（'…'、"…"、`…`）整段跳过；这一行里配不上对的引号当作撇号
+//   （`Don't`、Rust 的 `<'a>`），接着往后看
+// - 注释符前面要是空白（`https://`、`a#b` 不算）；`//`、`/*` 紧贴在语句结尾后面（`x;// …`、`}/* … */`、
+//   JSX 的 `{/* … */}`）的也认，`<!--` 前面是什么都认。前面不是空白的行注释符不算注释，
+//   但这一行后面不再开跨行字符串：多半还是注释，里面的反引号不是字符串的开头
+// - 块注释、docstring 要找到收尾才算注释，免得把后面整份文件当成注释；没收尾的跨行字符串照样算到文件末尾
+// - 连续两个以上的单字符分隔符（'```' 这类 Markdown 围栏）不算分隔符，免得把后面整份文件都当成字符串
+// - 行首的三引号字符串（前面最多有 r、b、f 这类前缀）是 docstring，算注释；赋值给变量的不算
+
+const UNKNOWN_LANG = { line: ['#', '//'], block: false, html: false };
+const CLOSE = { '/*': '*/', '<!--': '-->' };
+const DOCSTRING_PREFIX_RE = /^[rRuUbBfF]{0,2}$/;
+const afterBlank = (l, i, mark) => i === 0 || /\s/.test(l[i - 1]) || mark === '<!--' || (mark[0] === '/' && /[;,{})]/.test(l[i - 1]));
+
+export function scanSource(lines, lang) {
+  const { line: prefixes, block, html, strings = [], docstring } = lang || UNKNOWN_LANG;
+  const opens = [...(block ? ['/*'] : []), ...(html ? ['<!--'] : [])];
+  const spans = lines.map(() => []);
+  const str = new Set();
+  const blocks = [];
+  // 位置 (k, i) 后面还有没有 close。每种 close 最后出现在哪一行只找一次
+  const lastLine = {};
+  const closesAfter = (close, k, i) => {
+    if (lines[k].indexOf(close, i) !== -1) return true;
+    if (lastLine[close] === undefined) {
+      let n = lines.length - 1;
+      while (n >= 0 && !lines[n].includes(close)) n--;
+      lastLine[close] = n;
+    }
+    return lastLine[close] > k;
+  };
+  let open = null; // 还没收尾的跨行结构：{ close, string, comment, block }
   lines.forEach((l, k) => {
-    if (open) inside.add(k);
-    else if (commentBody(l.trimStart(), lang.line, k) !== null) return;
+    let from = 0; // 当前注释区间在这一行的起点：上一行延续下来的从 0 起
+    let quiet = false; // 碰到过前面不是空白的行注释符
+    if (open && open.string) str.add(k);
     for (let i = 0; i < l.length; i++) {
-      const c = l[i];
-      if (c === '\\') { i++; continue; }
       if (open) {
-        if (l.startsWith(open, i)) { i += open.length - 1; open = null; }
+        if (open.string && l[i] === '\\') { i++; continue; }
+        if (!l.startsWith(open.close, i)) continue;
+        i += open.close.length - 1;
+        if (open.comment) spans[k].push([from, i + 1]);
+        if (open.block) open.block.end = k;
+        open = null;
         continue;
       }
-      if (lang.line.some((p) => l.startsWith(p, i))) break;
-      const d = lang.strings.find((x) => l.startsWith(x, i));
+      const c = l[i];
+      if (c === '\\') { i++; continue; }
+      const p = prefixes.find((x) => l.startsWith(x, i));
+      if (p) {
+        if (afterBlank(l, i, p)) { spans[k].push([i, l.length]); return; }
+        quiet = true;
+      }
+      const o = opens.find((x) => l.startsWith(x, i));
+      if (o && afterBlank(l, i, o) && closesAfter(CLOSE[o], k, i + o.length)) {
+        open = { close: CLOSE[o], comment: true, block: { mark: o, start: k, end: k, col: i } };
+        blocks.push(open.block);
+        from = i;
+        i += o.length - 1;
+        continue;
+      }
+      const d = quiet ? undefined : strings.find((x) => l.startsWith(x, i));
       if (d) {
         let j = i;
         if (d.length === 1) while (l[j] === d) j++;
         if (j - i >= 2) { i = j - 1; continue; }
-        open = d;
+        const doc = !!docstring && d.length === 3 && DOCSTRING_PREFIX_RE.test(l.slice(0, i).trim()) && closesAfter(d, k, i + d.length);
+        open = { close: d, string: true, comment: doc };
+        from = i;
         i += d.length - 1;
         continue;
       }
-      if (c === '"' || c === "'") {
+      if (c === '"' || c === "'" || c === '`') {
         let j = i + 1;
         while (j < l.length && l[j] !== c) j += l[j] === '\\' ? 2 : 1;
-        i = j;
+        if (j < l.length) i = j;
       }
     }
+    if (open && open.comment) spans[k].push([from, l.length]);
   });
-  return inside;
+  return { spans, str, blocks };
 }
 
+// 独立成行的块注释（开头前面只有空白），带上是不是文档注释：JSDoc（/**）和 /*! license 块
+const standaloneBlocks = (blocks, lines) => blocks
+  .filter((b) => b.col === lines[b.start].search(/\S/))
+  .map((b) => ({ ...b, doc: b.mark === '/*' && /^\/\*[*!]/.test(lines[b.start].slice(b.col)) }));
+
 // 连续的独立行注释，允许中间夹一个空行。返回 [{ items: [{ k, body }], doc }]，k 为 0 起的行下标。
-// 紧贴声明（docBefore）的那一段（不跨空行）单独成一段，标为 doc。str 为 stringLines 的结果。
+// 紧贴声明（docBefore）的那一段（不跨空行）单独成一段，标为 doc。str 为 scanSource 的结果。
 function lineRuns(lines, lang, str) {
   const runs = [];
   if (!lang.line.length) return runs;
@@ -142,13 +203,13 @@ function lineRuns(lines, lang, str) {
   return runs;
 }
 
-// 一份文本只切一次行、只算一次字符串范围和行注释分段，长注释块和信号词共用
+// 一份文本只切一次行、只扫一遍、只算一次行注释分段，长注释块和信号词共用
 function prepare(text, file) {
   const lang = langFor(file);
   if (!lang) return null;
   const lines = text.split(/\r?\n/);
-  const str = stringLines(lines, lang);
-  return { lang, lines, str, runs: lineRuns(lines, lang, str) };
+  const { str, blocks } = scanSource(lines, lang);
+  return { lang, lines, str, blocks: standaloneBlocks(blocks, lines), runs: lineRuns(lines, lang, str) };
 }
 
 // 返回 [{ start, end, lines, text, kind }]，start/end 为 1 起的行号（相对 text）
@@ -157,20 +218,14 @@ export function findCommentBlocks(text, file, minLines = MIN_BLOCK_LINES) {
   return ctx ? blocksOf(ctx, minLines) : [];
 }
 
-// 带信号词的独立注释行（不含行尾注释），返回 [{ line, text }]
-export function findSignalComments(text, file) {
-  const ctx = prepare(text, file);
-  return ctx ? signalsOf(ctx) : [];
-}
-
-// 两样都要时用这个，省一遍分析
+// 长注释块和带信号词的独立注释行（不含行尾注释）一起找，只分析一遍
 export function analyzeComments(text, file) {
   const ctx = prepare(text, file);
   return ctx ? { blocks: blocksOf(ctx, MIN_BLOCK_LINES), signals: signalsOf(ctx) } : { blocks: [], signals: [] };
 }
 
-function blocksOf({ lang, lines, str, runs }, minLines) {
-  const blocks = [];
+function blocksOf({ lines, blocks, runs }, minLines) {
+  const out = [];
 
   // 1. 连续的独立行注释
   for (const run of runs) {
@@ -180,71 +235,49 @@ function blocksOf({ lang, lines, str, runs }, minLines) {
     const end = run.items[run.items.length - 1].k;
     const textBody = bodies.join('\n');
     if (bodies.length >= minLines && !bodies.every(isDirective) && !(start <= 2 && isLicense(textBody))) {
-      blocks.push({ start: start + 1, end: end + 1, lines: bodies.length, text: textBody, kind: 'line' });
+      out.push({ start: start + 1, end: end + 1, lines: bodies.length, text: textBody, kind: 'line' });
     }
   }
 
-  // 2. /* */ 块注释和 <!-- --> 注释：必须从行首开始（前面只有空白）。
+  // 2. /* */ 块注释和 <!-- --> 注释：只要独立成行的，JSDoc 和 /*! 不算。
   // 行数只算正文：单独占一行的开头 /* 和结尾 */ 不算，和行注释的口径一致
-  const scan = (open, close, kind, skip) => {
-    for (let i = 0; i < lines.length; i++) {
-      const t = lines[i].trimStart();
-      if (str.has(i) || !t.startsWith(open)) continue;
-      if (skip && skip(t)) continue;
-      let j = i;
-      let closed = lines[i].indexOf(close, lines[i].indexOf(open) + open.length) !== -1;
-      while (!closed && j + 1 < lines.length) {
-        j++;
-        closed = lines[j].includes(close);
-      }
-      let count = j - i + 1;
-      if (t.trim() === open) count--;
-      if (j > i && lines[j].trim() === close) count--;
-      const body = lines.slice(i, j + 1).join('\n');
-      if (closed && count >= minLines && !(i <= 2 && isLicense(body)) && !isLicense(body.split('\n').slice(0, 3).join('\n'))) {
-        blocks.push({ start: i + 1, end: j + 1, lines: count, text: body, kind });
-      }
-      i = j;
+  for (const b of blocks) {
+    if (b.doc) continue;
+    let count = b.end - b.start + 1;
+    if (lines[b.start].trim() === b.mark) count--;
+    if (b.end > b.start && lines[b.end].trim() === CLOSE[b.mark]) count--;
+    const body = lines.slice(b.start, b.end + 1).join('\n');
+    if (count >= minLines && !(b.start <= 2 && isLicense(body)) && !isLicense(body.split('\n').slice(0, 3).join('\n'))) {
+      out.push({ start: b.start + 1, end: b.end + 1, lines: count, text: body, kind: b.mark === '/*' ? 'block' : 'html' });
     }
-  };
-  if (lang.block) scan('/*', '*/', 'block', (t) => t.startsWith('/**') || t.startsWith('/*!'));
-  if (lang.html) scan('<!--', '-->', 'html', null);
+  }
 
-  return blocks.sort((a, b) => a.start - b.start);
+  return out.sort((a, b) => a.start - b.start);
 }
 
-function signalsOf({ lang, lines, str, runs }) {
+function signalsOf({ lang, lines, str, blocks, runs }) {
   const docLines = new Set(runs.filter((r) => r.doc).flatMap((r) => r.items.map((x) => x.k)));
   const prefixes = [...lang.line];
   if (lang.block) prefixes.push('/*');
   if (lang.html) prefixes.push('<!--');
+  // 行 -> 所在的独立块注释。开头那一行不在里面，按下面的注释前缀认
+  const inBlock = new Map();
+  for (const b of blocks) for (let k = b.start + 1; k <= b.end; k++) inBlock.set(k, b);
   const out = [];
   const hit = (idx, t, body) => {
     if (SIGNAL_RE.test(body)) out.push({ line: idx + 1, text: t.slice(0, 120) });
   };
-  // 跟踪是否在多行注释里：JSDoc（/**）和 /*! 整块跳过；`* ` 开头的行只在块注释内才算注释
-  let block = null; // null | 'doc' | 'plain' | 'html'
   lines.forEach((l, idx) => {
     const t = l.trimStart();
     if (str.has(idx)) return;
-    if (block === 'html') {
-      if (t.includes('-->')) block = null;
-      hit(idx, t, t);
+    const b = inBlock.get(idx);
+    if (b) {
+      // JSDoc（/**）和 /*! 整块跳过；`* ` 开头的行去掉星号再看
+      if (b.mark === '<!--') hit(idx, t, t);
+      else if (!b.doc && (/^\*(\s|$)/.test(t) || !t.startsWith('*'))) hit(idx, t, t.replace(/^\*/, ''));
       return;
     }
-    if (block) {
-      const inDoc = block === 'doc';
-      if (t.includes('*/')) block = null;
-      if (inDoc) return;
-      if (/^\*(\s|$)/.test(t) || !t.startsWith('*')) hit(idx, t, t.replace(/^\*/, ''));
-      return;
-    }
-    if (lang.block && t.startsWith('/*')) {
-      const isDoc = t.startsWith('/**') || t.startsWith('/*!');
-      if (!t.includes('*/', 2)) block = isDoc ? 'doc' : 'plain';
-      if (isDoc) return;
-    }
-    if (lang.html && t.startsWith('<!--') && !t.includes('-->', 4)) block = 'html';
+    if (lang.block && (t.startsWith('/**') || t.startsWith('/*!'))) return;
     if (docLines.has(idx)) return;
     const body = commentBody(t, prefixes, idx);
     if (body !== null) hit(idx, t, body);
