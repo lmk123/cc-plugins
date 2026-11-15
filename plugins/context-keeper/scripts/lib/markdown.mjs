@@ -64,18 +64,13 @@ export function proseLines(text) {
 
 // ---------- 路径段 ----------
 
-// marker 在 s 里作为一个路径段的开头出现的第一个位置，没有返回 -1。默认（s 是路径）前一个字符是 `/` 或 s 的开头才算；
+// marker 在 s 里作为一个路径段的开头出现的所有位置。默认（s 是路径）前一个字符是 `/` 或 s 的开头才算；
 // loose 为 true 时（s 是一段正文），前一个字符不是路径名里的字符就算，空白、引号、`(`、中文都行。
-// 两种都不认 `user-context-docs/` 中间的那一截；反斜杠后面的也不认：那是正则里转义的点，不是路径
+// 两种都不认 `user-context-docs/` 中间的那一截；反斜杠后面的也不认：那是正则里转义的点，不是路径。
+// 点开头的目录名前面是 `)`、`]`、`?` 的也不认：那是代码里取属性再做除法（`getApp().context/2`、`a?.context/n`）
 const NAME_CHAR_RE = /[A-Za-z0-9_.\\-]/;
-const atSegment = (s, i, loose) => i === 0 || (loose ? !NAME_CHAR_RE.test(s[i - 1]) : s[i - 1] === '/');
-export function segmentIndex(s, marker, loose = false) {
-  for (let i = s.indexOf(marker); i !== -1; i = s.indexOf(marker, i + 1)) {
-    if (atSegment(s, i, loose)) return i;
-  }
-  return -1;
-}
-// 同上，返回所有位置
+const atSegment = (s, i, loose) => i === 0
+  || (loose ? !NAME_CHAR_RE.test(s[i - 1]) && !(s[i] === '.' && /[)\]?]/.test(s[i - 1])) : s[i - 1] === '/');
 export function segmentIndexes(s, marker, loose = false) {
   const out = [];
   for (let i = s.indexOf(marker); i !== -1; i = s.indexOf(marker, i + 1)) {
@@ -83,3 +78,5 @@ export function segmentIndexes(s, marker, loose = false) {
   }
   return out;
 }
+// 第一个位置，没有返回 -1
+export const segmentIndex = (s, marker, loose = false) => segmentIndexes(s, marker, loose)[0] ?? -1;
