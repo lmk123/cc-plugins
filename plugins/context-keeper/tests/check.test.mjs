@@ -283,6 +283,17 @@ test('没被 .gitignore 忽略的 CLAUDE.local.md 报警告，忽略了的不报
   assert.deepEqual(of(check(makeRepo({ ...CLEAN, ...local, '.gitignore': 'CLAUDE.local.md\n' })), 'local-not-ignored'), []);
 });
 
+test('已经提交的 CLAUDE.local.md 即使 .gitignore 写了也报，提示 git rm --cached 而不是再加 .gitignore', () => {
+  const t = makeRepo({ ...CLEAN, 'apps/web/CLAUDE.local.md': '- 定价先看竞品\n' });
+  spawnSync('git', ['add', '-A'], { cwd: t.repo });
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], { cwd: t.repo });
+  fs.writeFileSync(path.join(t.repo, '.gitignore'), 'CLAUDE.local.md\n');
+  const hits = of(check(t), 'local-not-ignored');
+  assert.deepEqual(hits.map((f) => f.file), ['apps/web/CLAUDE.local.md']);
+  assert.match(hits[0].msg, /已经提交/);
+  assert.match(hits[0].msg, /git rm --cached/);
+});
+
 // ---------- 修剪候选 ----------
 
 test('叙述形态：完整日期、状态词、叙述词按文件汇总，年月观测日期、行内代码、CLAUDE.local.md 不算', () => {

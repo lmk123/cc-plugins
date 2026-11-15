@@ -190,6 +190,7 @@ function legacyDirOf(f) {
 
 const rules = OWN.filter((f) => RULE_RE.test(f) && !legacyDirOf(f));
 const claudeMds = OWN.filter((f) => CLAUDE_MD_RE.test(f) && !legacyDirOf(f));
+const isLocalMd = (f) => /(^|\/)CLAUDE\.local\.md$/.test(f);
 const skills = OWN.filter((f) => SKILL_RE.test(f));
 const skillMds = OWN.filter((f) => SKILL_MD_RE.test(f));
 
@@ -527,10 +528,16 @@ for (const f of claudeMds) {
   }
 }
 
-// CLAUDE.local.md 是只留本机的文件（不打算公开的业务方向、个人设置）。被忽略的不在 ls-files 里，出现在这里就是没被忽略
+// CLAUDE.local.md 是只留本机的文件（不打算公开的业务方向、个人设置）。没被忽略的未跟踪文件和已经提交的文件都在 ls-files 里：
+// 已提交的再加 .gitignore 也没用，要分开提示
 if (IS_GIT) {
-  for (const f of claudeMds.filter((f) => /(^|\/)CLAUDE\.local\.md$/.test(f))) {
-    add('warn', 'local-not-ignored', f, 'CLAUDE.local.md 没被 .gitignore 忽略：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略），一提交就进了仓库。在 .gitignore 里加一行 `CLAUDE.local.md`；已经提交过的，还要 `git rm --cached`');
+  const locals = claudeMds.filter(isLocalMd);
+  // 没有路径时 ls-files 会列出整个仓库，先判空；路径按字面匹配，目录名里的 `*`、`[` 不当 glob
+  const tracked = new Set(locals.length ? git(['--literal-pathspecs', 'ls-files', '-z', '--cached', '--', ...locals]).stdout.split('\0').filter(Boolean) : []);
+  for (const f of locals) {
+    add('warn', 'local-not-ignored', f, tracked.has(f)
+      ? 'CLAUDE.local.md 已经提交进了仓库：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略）。`git rm --cached` 把它移出仓库（文件留在本机），.gitignore 里还没有 `CLAUDE.local.md` 的补上一行；git 历史里仍看得到，要不要改写历史由用户定'
+      : 'CLAUDE.local.md 没被 .gitignore 忽略：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略），一提交就进了仓库。在 .gitignore 里加一行 `CLAUDE.local.md`');
   }
 }
 
@@ -546,7 +553,7 @@ const NARRATIVE_RE = new RegExp([
   '起初', '(?<![还复])原本', '最初', '改回(?![调复车滚退])',
 ].join('|'));
 const narrativeSources = [
-  ...claudeMds.filter((f) => !/CLAUDE\.local\.md$/.test(f)),
+  ...claudeMds.filter((f) => !isLocalMd(f)),
   ...rules.filter((f) => !INDEX_RULE_RE.test(f)),
   ...skillMds,
 ];
