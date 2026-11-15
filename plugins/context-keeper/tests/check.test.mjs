@@ -294,6 +294,26 @@ test('已经提交的 CLAUDE.local.md 即使 .gitignore 写了也报，提示 gi
   assert.match(hits[0].msg, /git rm --cached/);
 });
 
+test('已经提交、也没被忽略的 CLAUDE.local.md 按已提交提示；带路径时只报路径下的；目录名带 glob 字符照常认', () => {
+  const t = makeRepo({ ...CLEAN, 'CLAUDE.local.md': '- 定价先看竞品\n', 'apps/[web]/CLAUDE.local.md': '- 定价先看竞品\n' });
+  spawnSync('git', ['add', '-A'], { cwd: t.repo });
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], { cwd: t.repo });
+  const hits = of(check(t), 'local-not-ignored');
+  assert.deepEqual(hits.map((f) => f.file).sort(), ['CLAUDE.local.md', 'apps/[web]/CLAUDE.local.md'].sort());
+  for (const h of hits) assert.match(h.msg, /已经提交/);
+  assert.deepEqual(files(check(t, ['apps']), 'local-not-ignored'), ['apps/[web]/CLAUDE.local.md']);
+});
+
+test('CLAUDE.local.md 里带原因的行不报：它是只留本机的内容，不该被建议移进 rule', () => {
+  const r = check(makeRepo({ ...CLEAN, '.gitignore': 'CLAUDE.local.md\n', 'CLAUDE.md': `${CLEAN['CLAUDE.md']}- 别用 A，因为太慢\n` }));
+  assert.deepEqual(files(r, 'claude-md'), ['CLAUDE.md']);
+  const t = makeRepo({ ...CLEAN, 'CLAUDE.local.md': '- 定价先看竞品 A，因为我们是跟随者\n' });
+  spawnSync('git', ['add', '-A'], { cwd: t.repo });
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], { cwd: t.repo });
+  fs.writeFileSync(path.join(t.repo, '.gitignore'), 'CLAUDE.local.md\n');
+  assert.deepEqual(of(check(t), 'claude-md'), []);
+});
+
 // ---------- 修剪候选 ----------
 
 test('叙述形态：完整日期、状态词、叙述词按文件汇总，年月观测日期、行内代码、CLAUDE.local.md 不算', () => {

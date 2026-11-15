@@ -66,10 +66,20 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.n
 const THIRD_PARTY_DIRS = new Set(['node_modules', 'vendor']);
 const isThirdParty = (f) => f.split('/').some((s) => THIRD_PARTY_DIRS.has(s));
 
+// 已经进了 git 索引的文件（listFiles 顺带记下）：判断 CLAUDE.local.md 是没被忽略还是已经提交了
+const TRACKED = new Set();
 function listFiles() {
   if (IS_GIT) {
-    const r = git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
-    return [...new Set(r.stdout.split('\0').filter(Boolean))].filter((f) => fs.existsSync(path.join(ROOT, f)));
+    // -t 给每个路径加状态前缀：`? ` 是未跟踪的，其余（H、S、M…）都在索引里
+    const r = git(['ls-files', '-z', '-t', '--cached', '--others', '--exclude-standard']);
+    const all = new Set();
+    for (const e of r.stdout.split('\0')) {
+      if (e.length < 3) continue;
+      const f = e.slice(2);
+      all.add(f);
+      if (e[0] !== '?') TRACKED.add(f);
+    }
+    return [...all].filter((f) => fs.existsSync(path.join(ROOT, f)));
   }
   const out = [];
   const walk = (dir) => {
@@ -517,6 +527,8 @@ for (const f of claudeMds) {
   const lines = text.split(/\r?\n/);
   // 以换行结尾时 split 会多出一个空串，和 wc -l 对齐
   claudeMdStats.push({ file: f, lines: text ? lines.length - (/\n$/.test(text) ? 1 : 0) : 0 });
+  // CLAUDE.local.md 是用户选了只留本机的内容，「移进 rule 或注释」等于把它公开，不报
+  if (isLocalMd(f)) continue;
   const seen = new Set();
   reasonLines.set(f, seen);
   const legacy = legacyLines(f);
@@ -531,11 +543,8 @@ for (const f of claudeMds) {
 // CLAUDE.local.md 是只留本机的文件（不打算公开的业务方向、个人设置）。没被忽略的未跟踪文件和已经提交的文件都在 ls-files 里：
 // 已提交的再加 .gitignore 也没用，要分开提示
 if (IS_GIT) {
-  const locals = claudeMds.filter(isLocalMd);
-  // 没有路径时 ls-files 会列出整个仓库，先判空；路径按字面匹配，目录名里的 `*`、`[` 不当 glob
-  const tracked = new Set(locals.length ? git(['--literal-pathspecs', 'ls-files', '-z', '--cached', '--', ...locals]).stdout.split('\0').filter(Boolean) : []);
-  for (const f of locals) {
-    add('warn', 'local-not-ignored', f, tracked.has(f)
+  for (const f of claudeMds.filter(isLocalMd)) {
+    add('warn', 'local-not-ignored', f, TRACKED.has(f)
       ? 'CLAUDE.local.md 已经提交进了仓库：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略）。`git rm --cached` 把它移出仓库（文件留在本机），.gitignore 里还没有 `CLAUDE.local.md` 的补上一行；git 历史里仍看得到，要不要改写历史由用户定'
       : 'CLAUDE.local.md 没被 .gitignore 忽略：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略），一提交就进了仓库。在 .gitignore 里加一行 `CLAUDE.local.md`');
   }
