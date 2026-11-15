@@ -206,7 +206,8 @@ export function commentLines(lines, lang) {
   return comment;
 }
 
-// 一行源码里，位置 at 落在行尾注释里：at 之前有注释符，注释符前面是空白（`https://` 不算），而且不在字符串里。
+// 一行源码里，位置 at 落在行尾注释里：at 之前有注释符，而且不在字符串里。
+// 注释符前面要是空白（`https://`、`a#b` 不算）；`//`、`/*` 紧贴在语句结尾后面（`x;// …`、`}/* … */`）的也认，`<!--` 前面是什么都认。
 // 字符串只按引号粗略配对；at 之前有没配上对的引号时当作 at 在字符串里
 export function trailingCommentBefore(line, at, lang) {
   const { line: prefixes, block, html } = lang || UNKNOWN_LANG;
@@ -220,7 +221,9 @@ export function trailingCommentBefore(line, at, lang) {
       i = j;
       continue;
     }
-    if ((i === 0 || /\s/.test(line[i - 1])) && marks.some((p) => line.startsWith(p, i))) return true;
+    const mark = marks.find((p) => line.startsWith(p, i));
+    if (!mark) continue;
+    if (i === 0 || /\s/.test(line[i - 1]) || mark === '<!--' || (mark[0] === '/' && /[;,{})]/.test(line[i - 1]))) return true;
   }
   return false;
 }

@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { analyzeComments, commentLines, langFor, trailingCommentBefore } from './lib/comments.mjs';
 import {
   AGENT_MD_RE, CLAUDE_MD_RE, INDEX_RULE_RE, LEGACY_DOC_DIRS, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_MD_RE, SKILL_RE,
-  proseLines, segmentIndex,
+  proseLines, segmentIndex, segmentIndexes,
 } from './lib/markdown.mjs';
 
 const argv = process.argv.slice(2);
@@ -47,7 +47,11 @@ if (target) {
 const IS_GIT = top.status === 0;
 if (IS_GIT) ROOT = top.stdout.trim();
 
+// 不是 git 仓库时遍历要跳过的目录：没有 .gitignore 可问，构建产物和第三方代码只能按名字认
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.turbo', '.cache', 'coverage', 'target', 'vendor']);
+// 进了 git 也不算这个仓库自己的：第三方代码。`build/`、`dist/`、`target/` 这类名字进了 git 的多半是真的包或目录，照常检查
+const THIRD_PARTY_DIRS = new Set(['node_modules', 'vendor']);
+const isThirdParty = (f) => f.split('/').some((s) => THIRD_PARTY_DIRS.has(s));
 
 function listFiles() {
   if (IS_GIT) {
@@ -68,6 +72,8 @@ function listFiles() {
 
 const FILES = listFiles().sort();
 const FILE_SET = new Set(FILES);
+// 这个仓库自己的文件：所有检查都只看它们。FILES 只在算 rule 的 glob 匹配到哪些文件时用（rule 可以指向第三方目录里的文件）
+const OWN = FILES.filter((f) => !isThirdParty(f));
 
 let FILTER = '';
 if (target) {
@@ -129,7 +135,10 @@ const findings = [];
 const add = (level, category, file, msg, line) => {
   if (inScope(file)) findings.push({ level, category, file, line, msg });
 };
-
+// 挂在目录上的发现：路径参数落在这个目录里面（只看其中一个领域）时也要报
+const addDir = (level, category, dir, msg) => {
+  if (inScope(dir) || FILTER.startsWith(dir)) findings.push({ level, category, file: dir, line: undefined, msg });
+};
 
 // ---------- 分类 ----------
 
@@ -139,18 +148,17 @@ const RULE_MAX_PATHS = 10;
 const EMPHASIS_MAX = 2;
 const ruleBodyLines = new Map(); // rule -> 正文行数（不算 frontmatter 和空行），规模汇总用
 
-// rule 正文里 ⚠ 和加粗的处数，代码块和行内代码里的不算
+// rule 正文里 ⚠ 和加粗的处数，代码块和行内代码里的不算。
+// 紧贴 `/` 的 `**` 是没包反引号的 glob（`src/**/foo`），不是加粗的标记
 function emphasisCount(body) {
   let n = 0;
   for (const [line] of proseLines(body)) {
-    const plain = line.replace(/`[^`]*`/g, '');
+    const plain = line.replace(/`[^`]*`/g, '').replace(/\/\*\*|\*\*\//g, '/');
     n += (plain.match(/⚠/g) || []).length + (plain.match(/\*\*[^*\n]+?\*\*/g) || []).length;
   }
   return n;
 }
 
-// 第三方、构建产物目录（node_modules、vendor 等）下的东西不是这个仓库的
-const inSkipDir = (f) => f.split('/').some((s) => SKIP_DIRS.has(s));
 // s 里第一个作为路径段开头出现的旧版文档目录，返回 [位置, 目录名]，没有返回 null。
 // s 是文件路径时按完整的目录名认；loose 为 true 时 s 是一行正文（见 segmentIndex）
 function firstLegacy(s, loose = false) {
@@ -167,10 +175,10 @@ function legacyDirOf(f) {
   return hit ? f.slice(0, hit[0] + hit[1].length + 1) : null;
 }
 
-const rules = FILES.filter((f) => RULE_RE.test(f) && !legacyDirOf(f));
-const claudeMds = FILES.filter((f) => CLAUDE_MD_RE.test(f) && !legacyDirOf(f));
-const skills = FILES.filter((f) => SKILL_RE.test(f));
-const skillMds = FILES.filter((f) => SKILL_MD_RE.test(f));
+const rules = OWN.filter((f) => RULE_RE.test(f) && !legacyDirOf(f));
+const claudeMds = OWN.filter((f) => CLAUDE_MD_RE.test(f) && !legacyDirOf(f));
+const skills = OWN.filter((f) => SKILL_RE.test(f));
+const skillMds = OWN.filter((f) => SKILL_MD_RE.test(f));
 
 // marker 作为完整的目录名出现的第一个位置：`.claude/rules/` 前面的部分是作用域
 const scopeOf = (f, marker) => f.slice(0, segmentIndex(f, marker));
@@ -469,9 +477,9 @@ for (const f of [...claudeMds, ...rules]) {
 
 // ---------- 指向旧版文档目录的行 ----------
 
-// 一行正文里第一个旧版文档目录出现的位置（作为路径段的开头），没有返回 -1
-const legacyAt = (line) => firstLegacy(line, true)?.[0] ?? -1;
-const mentionsLegacy = (line) => legacyAt(line) !== -1;
+const mentionsLegacy = (line) => firstLegacy(line, true) !== null;
+// 一行里每一处旧版文档目录出现的位置（作为路径段的开头）
+const legacyPositions = (line) => LEGACY_DOC_DIRS.flatMap((d) => segmentIndexes(line, `${d}/`, true));
 // Markdown 文件 f 的正文里提到旧版文档目录的行（0 起的下标）。带原因、叙述形态、旧版指针三项检查共用，每个文件只算一次
 const legacyLineCache = new Map();
 function legacyLines(f) {
@@ -550,7 +558,7 @@ if (IS_GIT) {
       const dir = segs.slice(0, k + 1).map((x) => `${x}/`).join('');
       if (!checked.has(dir)) {
         checked.add(dir);
-        if (!inSkipDir(dir) && hasMarkdown(dir)) ignoredLegacyDirs.add(dir);
+        if (!isThirdParty(dir) && hasMarkdown(dir)) ignoredLegacyDirs.add(dir);
       }
     }
     const c = segs.indexOf('.claude');
@@ -561,14 +569,14 @@ if (IS_GIT) {
 // ---------- 旧版文档 ----------
 
 const legacyDocs = new Map(); // 旧版文档目录 -> 其中的 Markdown 文件
-for (const f of FILES) {
-  if (!MARKDOWN_RE.test(f) || inSkipDir(f)) continue;
+for (const f of OWN) {
+  if (!MARKDOWN_RE.test(f)) continue;
   const dir = legacyDirOf(f);
   if (!dir) continue;
   if (!legacyDocs.has(dir)) legacyDocs.set(dir, []);
   legacyDocs.get(dir).push(f);
 }
-for (const f of FILES) {
+for (const f of OWN) {
   const i = segmentIndex(f, '.claude/');
   if (i !== -1 && !legacyDirOf(f)) scopes.add(f.slice(0, i));
 }
@@ -576,19 +584,19 @@ for (const dir of [...legacyDocs.keys(), ...ignoredLegacyDirs]) {
   scopes.add(dir.slice(0, dir.slice(0, -1).lastIndexOf('/') + 1));
 }
 for (const [dir, list] of legacyDocs) {
-  add('warn', 'legacy', dir, `旧版文档目录（${list.length} 份文档）：0.10.0 起不再有项目文档。每份文档里过得了准入门槛、原处还没有的结论放回原处，其余随文档删掉，指针只留重点（跑 organize-context，文档多的按领域分批）`);
+  addDir('warn', 'legacy', dir, `旧版文档目录（${list.length} 份文档）：0.10.0 起不再有项目文档。每份文档里过得了准入门槛、原处还没有的结论放回原处，其余随文档删掉，指针只留重点（跑 organize-context，文档多的按领域分批）`);
 }
 for (const dir of ignoredLegacyDirs) {
   if (legacyDocs.has(dir)) continue;
-  add('warn', 'legacy', dir, '旧版文档目录，被 .gitignore 忽略了：0.10.0 起不再有项目文档。里面过得了准入门槛的结论放回原处；是不是只当本地草稿、要不要删，交给用户决定');
+  addDir('warn', 'legacy', dir, '旧版文档目录，被 .gitignore 忽略了：0.10.0 起不再有项目文档。里面过得了准入门槛的结论放回原处；是不是只当本地草稿、要不要删，交给用户决定');
 }
 
 // 放在 `.claude/` 下、又不是 rule、skill、子代理记忆这类 Claude Code 自己的文件的文档，以及按类型分目录的文档（decisions/、adr/）。
 // 更早的插件版本往这两种地方放过文档，但团队自己的 ADR、别的工具的文件也长这样：只给提示，是不是旧版文档由人确认
 const CLAUDE_OWN = /(^|\/)\.claude\/(rules|skills|commands|agents|agent-memory(-local)?|output-styles|hooks|worktrees)\//;
 const typeDirs = new Map(); // 目录 -> 文档数
-for (const f of FILES) {
-  if (!MARKDOWN_RE.test(f) || legacyDirOf(f) || CLAUDE_MD_RE.test(f) || /(^|\/)node_modules\//.test(f)) continue;
+for (const f of OWN) {
+  if (!MARKDOWN_RE.test(f) || legacyDirOf(f) || CLAUDE_MD_RE.test(f)) continue;
   if (/(^|\/)\.claude\//.test(f) && !CLAUDE_OWN.test(f)) {
     add('info', 'legacy', f, '放在 `.claude/` 下的文档：Claude Code 不会从这里加载它。是旧版插件留下的项目文档才按旧版文档处理；团队自己或别的工具放的不动，由用户确认');
     continue;
@@ -597,19 +605,21 @@ for (const f of FILES) {
   if (m) typeDirs.set(m[1], (typeDirs.get(m[1]) || 0) + 1);
 }
 for (const [dir, n] of typeDirs) {
-  add('info', 'legacy', dir, `疑似按类型分的文档目录（${n} 份）：是旧版插件建的（有「重点 + 路径」的指针指向它）才按旧版文档处理；团队自己维护的 ADR、被代码读取的不动，由用户确认`);
+  addDir('info', 'legacy', dir, `疑似按类型分的文档目录（${n} 份）：是旧版插件建的（有「重点 + 路径」的指针指向它）才按旧版文档处理；团队自己维护的 ADR、被代码读取的不动，由用户确认`);
 }
 
 // ---------- 旧版指针 ----------
 // Claude 会加载的 Markdown（CLAUDE.md、rule、skill、子代理和命令的定义）里，以及源码注释里提到旧版文档目录的行。
+// 这些 Markdown 的代码块里提到的不算指针，但多半是要照着执行的命令（`cat <文档>`），删了文档就指空，另列提示。
 // 源码按所在语言的注释语法认注释（含行尾注释）；命令参数、字符串、配置值里的路径不是指针，另列「代码字符串」。
-// 别的 Markdown（README、对外文档）不是指针，但删了文档链接会指空，仓库里还有旧版文档时另列提示。
+// 别的 Markdown（README、对外文档）不是指针，但删了文档链接会指空。这两类都只在仓库里还有旧版文档时提示：
+// 没有文档可删时，`.gitignore` 里的一行同名目录、历史记录里的旧路径不用再提。
 // 先用 git grep 筛（范围与 ls-files 一致），不用把整个仓库读进内存
 
 const legacyPointerLines = new Map(); // 文件 -> 指向旧版文档的行数，规模汇总用
-const MD_SOURCES = new Set([...claudeMds, ...rules, ...skillMds, ...FILES.filter((f) => AGENT_MD_RE.test(f) && !legacyDirOf(f))]);
+const MD_SOURCES = new Set([...claudeMds, ...rules, ...skillMds, ...OWN.filter((f) => AGENT_MD_RE.test(f) && !legacyDirOf(f))]);
 function othersMentioningLegacy() {
-  const wanted = (f) => !MD_SOURCES.has(f) && !legacyDirOf(f) && !inSkipDir(f);
+  const wanted = (f) => !MD_SOURCES.has(f) && !legacyDirOf(f) && !isThirdParty(f);
   if (IS_GIT) {
     const r = git(['grep', '-lIz', '--untracked', '-F', ...LEGACY_DOC_DIRS.flatMap((d) => ['-e', `${d}/`])]);
     if (r.status === 0 || r.status === 1) return r.stdout.split('\0').filter((f) => FILE_SET.has(f) && wanted(f));
@@ -623,7 +633,17 @@ function reportLegacyPointers(f, hits) {
   if (INDEX_RULE_RE.test(f)) return; // 整条 rule 已经报了「旧版领域索引 rule」
   add('warn', 'legacy-pointer', f, `旧版指针：${hits.length} 处指向旧版文档目录：${lineList(hits)}。只留重点（重点是经过或状态的改写成结论或删掉），删掉「什么时候读 + 路径」`, hits[0]);
 }
-for (const f of MD_SOURCES) reportLegacyPointers(f, [...legacyLines(f)].map((i) => i + 1));
+for (const f of MD_SOURCES) {
+  reportLegacyPointers(f, [...legacyLines(f)].map((i) => i + 1));
+  const text = read(f);
+  if (text === null || INDEX_RULE_RE.test(f)) continue;
+  const proseIdx = new Set(prose(f).map(([, i]) => i));
+  const code = [];
+  text.split(/\r?\n/).forEach((line, i) => { if (!proseIdx.has(i) && mentionsLegacy(line)) code.push(i + 1); });
+  if (code.length) {
+    add('info', 'legacy-code-block', f, `代码块里有 ${code.length} 行提到旧版文档目录：${lineList(code)}。文档删掉后这些路径会指空：是要照着执行的命令（读文件、传路径）就改掉，只是示例的不用动`, code[0]);
+  }
+}
 const hasLegacyDocs = legacyDocs.size > 0 || ignoredLegacyDirs.size > 0;
 for (const f of othersMentioningLegacy()) {
   const text = readRaw(f);
@@ -643,14 +663,16 @@ for (const f of othersMentioningLegacy()) {
   const hits = [];
   const strings = [];
   lines.forEach((line, i) => {
-    const at = legacyAt(line);
-    if (at === -1) return;
-    if (comment[i] || trailingCommentBefore(line, at, lang)) hits.push(i + 1);
-    else strings.push(i + 1);
+    const at = legacyPositions(line);
+    if (!at.length) return;
+    // 每一处各自判断：`const P = '<文档>'; // 见 <文档>` 这一行既有字符串里的路径，也有注释里的指针
+    const inComment = at.map((p) => comment[i] || trailingCommentBefore(line, p, lang));
+    if (inComment.includes(true)) hits.push(i + 1);
+    if (inComment.includes(false)) strings.push(i + 1);
   });
   reportLegacyPointers(f, hits);
   // 可执行的行（命令参数、字符串、配置值、ignore 规则）提到旧版文档：删了文档它们就指空，而改它们要动可执行代码
-  if (strings.length) {
+  if (strings.length && hasLegacyDocs) {
     add('info', 'legacy-string', f, `代码（不是注释）里有 ${strings.length} 行提到旧版文档目录：${lineList(strings)}。删这些文档前，先由用户决定这些行怎么改`, strings[0]);
   }
 }
@@ -669,8 +691,8 @@ for (const { dir, probe, msg } of PROBES) {
 // ---------- 注释候选 ----------
 
 if (WANT_COMMENTS) {
-  for (const f of FILES) {
-    if (!inScope(f) || !langFor(f) || NOT_CODE_DIR_RE.test(f) || inSkipDir(f)) continue;
+  for (const f of OWN) {
+    if (!inScope(f) || !langFor(f) || NOT_CODE_DIR_RE.test(f)) continue;
     const text = readRaw(f);
     if (!text) continue;
     const { blocks, signals } = analyzeComments(text, f);

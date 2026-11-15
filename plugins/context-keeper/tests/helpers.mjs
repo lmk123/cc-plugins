@@ -19,24 +19,16 @@ export function makeRepo(files) {
   return { repo, tmp };
 }
 
-function run(script, input, { tmp, env = {} }) {
-  const r = spawnSync('node', [path.join(SCRIPTS, script)], {
-    input: JSON.stringify(input),
-    encoding: 'utf8',
-    env: { ...process.env, TMPDIR: tmp, ...env },
-  });
-  return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : null;
-}
-
 // 模拟 Write / Edit 之后触发 comment-hook。返回提醒文字，没提醒时返回 null
 export function commentHook(t, { file, tool = 'Write', response }) {
-  const out = run('comment-hook.mjs', {
+  const input = {
     cwd: t.repo,
     tool_name: tool,
     tool_input: { file_path: path.join(t.repo, file) },
     tool_response: response,
-  }, { tmp: t.tmp });
-  return out ? out.additionalContext : null;
+  };
+  const r = spawnSync('node', [path.join(SCRIPTS, 'comment-hook.mjs')], { input: JSON.stringify(input), encoding: 'utf8' });
+  return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.additionalContext : null;
 }
 
 export function check(t, args = []) {

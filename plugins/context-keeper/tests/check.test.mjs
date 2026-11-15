@@ -80,6 +80,8 @@ test('带路径时只报告该路径下的问题', () => {
   const t = makeRepo({ ...CLEAN, 'src/api/b.ts': `// 改 B 前读 ${DOCS}/api/b.md\nconst B = 1;\n`, [`${DOCS}/api/b.md`]: '# b\n' });
   assert.equal(check(t, ['src/styles']).findings.length, 0);
   assert.deepEqual(check(t, ['src/api']).findings.map((f) => f.file), ['src/api/b.ts']);
+  // 路径落在旧版文档目录里面（只看其中一个领域）时，目录本身照报
+  assert.deepEqual(files(check(t, [`${DOCS}/api`]), 'legacy'), [`${DOCS}/`]);
 });
 
 // ---------- 旧版文档 ----------
@@ -109,6 +111,23 @@ test('被 .gitignore 忽略的旧版文档目录也报；同名文件、缓存�
     [`vendor/lib/${DOT}/api/x.md`]: '# 第三方\n',
   }));
   assert.deepEqual(of(r, 'legacy'), []);
+});
+
+test('进了 git 的 build/、target/ 这类目录是仓库自己的：里面的旧版文档、指针、长注释照查，vendor/ 下的不查', () => {
+  const long = '// 以前是 5 次\n// 后来出了事故\n// 试过熔断\n// 放弃了\nconst A = 1;\n';
+  const r = check(makeRepo({
+    ...CLEAN,
+    [`packages/build/${DOCS}/api/a.md`]: '# a\n',
+    'packages/build/src/a.ts': `// 改之前读 packages/build/${DOCS}/api/a.md\nexport const a = 1;\n`,
+    'packages/target/src/long.ts': long,
+    'vendor/lib/src/long.ts': long,
+    'vendor/lib/CLAUDE.md': '- 不用 squash，因为要保留历史\n',
+    'vendor/lib/docs/adr/0001.md': '# adr\n',
+  }), ['--comments']);
+  assert.deepEqual(files(r, 'legacy'), [`packages/build/${DOCS}/`]);
+  assert.deepEqual(files(r, 'legacy-pointer'), ['packages/build/src/a.ts']);
+  assert.deepEqual(files(r, 'comment-block'), ['packages/target/src/long.ts']);
+  assert.deepEqual(of(r, 'claude-md'), []);
 });
 
 test('旧版领域索引 rule 整条报一次，不再按 rule 的长度、指针另报', () => {
@@ -163,6 +182,8 @@ test('旧版指针：代码块里的示例、别的 Markdown、vendor 下的、�
     'src/api/a.ts': `// 读 user-${DOCS}/x.md\nexport const a = 1;\n`,
   }));
   assert.deepEqual(of(r, 'legacy-pointer'), []);
+  // Claude 会加载的 Markdown 的代码块里提到的另列提示：可能是要照着执行的命令。别的 Markdown 的不提
+  assert.deepEqual(of(r, 'legacy-code-block').map((f) => [f.file, f.line, f.level]), [['CLAUDE.md', 9, 'info']]);
 });
 
 test('旧版指针：可执行的行里的路径不是指针，按语言的注释语法分，另列代码字符串', () => {
@@ -179,6 +200,22 @@ test('旧版指针：可执行的行里的路径不是指针，按语言的注�
   assert.deepEqual(of(r, 'legacy-pointer').map((f) => [f.file, f.line]), [['infra/Caddyfile', 1], ['scripts/pack.sh', 2]]);
   assert.deepEqual(files(r, 'legacy-string'), ['.github/workflows/ci.yml', '.prettierignore', 'scripts/pack.sh', 'src/api/b.ts']);
   assert.match(of(r, 'legacy-string').find((f) => f.file === 'scripts/pack.sh').msg, /2 行.*第 3、5 行/);
+});
+
+test('旧版指针：一行里字符串和行尾注释都提到时两边各算；紧贴语句的行尾注释也认；正则里转义的点不算', () => {
+  const p = `${DOCS}/api/retry.md`;
+  const r = check(makeRepo({
+    ...CLEAN,
+    [p]: '# 重试\n',
+    'src/api/b.ts': `const doc = "${p}"; // 见 ${p}\nconst a = 1;// 见 ${p}\nconst re = /\\${DOT}\//;\n`,
+  }));
+  assert.match(of(r, 'legacy-pointer').find((f) => f.file === 'src/api/b.ts').msg, /2 处.*第 1、2 行/);
+  assert.match(of(r, 'legacy-string').find((f) => f.file === 'src/api/b.ts').msg, /1 行.*第 1 行/);
+});
+
+test('代码字符串只在还有旧版文档时提示：没有文档可删时，ignore 文件里的同名目录不用提', () => {
+  const r = check(makeRepo({ ...CLEAN, '.dockerignore': `${DOT}/\n${DOCS}/\n`, 'src/api/b.ts': `const out = '${DOCS}/x.md';\n` }));
+  assert.deepEqual(r.findings, []);
 });
 
 test('旧版指针：子代理和命令的定义里的算指针；别的 Markdown 只在还有旧版文档时给提示', () => {
@@ -244,6 +281,9 @@ test('强调泛滥：⚠ 和加粗超过两处给提示，代码块和行内代�
     '.claude/rules/styling/ok.md': `${fm}改 token 后**必须**跑 \`**pnpm**\`，⚠️ 页面不报错。\n\n\`\`\`\n**x** ⚠️ **y**\n\`\`\`\n`,
   }));
   assert.deepEqual(files(r, 'prune-emphasis'), ['.claude/rules/styling/loud.md']);
+  // 没包反引号的 glob 里的 ** 不是加粗
+  const globs = check(makeRepo({ ...CLEAN, '.claude/rules/styling/globs.md': `${fm}匹配 src/**/a、lib/**/b、x/**/c、y/**/d、z/**/e、w/**/f 的都要同步改。\n` }));
+  assert.deepEqual(of(globs, 'prune-emphasis'), []);
   assert.equal(of(r, 'prune-emphasis')[0].level, 'info');
 });
 

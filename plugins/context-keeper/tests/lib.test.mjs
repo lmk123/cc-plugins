@@ -1,11 +1,12 @@
 // lib/ 里纯函数的单元测试：Markdown 正文行、路径段、一行源码是不是注释
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { proseLines, segmentIndex } from '../scripts/lib/markdown.mjs';
+import { proseLines, segmentIndex, segmentIndexes } from '../scripts/lib/markdown.mjs';
 import { commentLines, langFor, trailingCommentBefore } from '../scripts/lib/comments.mjs';
 
 // 旧版文档目录名拆开写，理由见 check.test.mjs
 const DOCS = ['context', 'docs'].join('-');
+const DOT = ['', 'context'].join('.');
 
 test('segmentIndex 只认完整的目录名', () => {
   const p = `a/${DOCS}/x/user-${DOCS}/${DOCS}/y.md`;
@@ -14,6 +15,10 @@ test('segmentIndex 只认完整的目录名', () => {
   assert.equal(segmentIndex(`cat "user-${DOCS}/y.md"`, `${DOCS}/`, true), -1);
   assert.equal(segmentIndex(`cat "${DOCS}/y.md"`, `${DOCS}/`, true), 5);
   assert.equal(segmentIndex(`见（${DOCS}/y.md）`, `${DOCS}/`, true), 2);
+  // 一行里的每一处都要：同一行可以既有字符串里的路径，也有注释里的指针
+  assert.deepEqual(segmentIndexes(`"${DOCS}/a" // ${DOCS}/b x-${DOCS}/c`, `${DOCS}/`, true), [1, DOCS.length + 8]);
+  // 正则里转义的点后面的不是路径
+  assert.equal(segmentIndex(`re = /\\${DOT}\//`, `${DOT}/`, true), -1);
 });
 
 test('proseLines 跳过缩进代码块，列表项里缩进的续行不算代码块', () => {
@@ -67,6 +72,11 @@ test('trailingCommentBefore：注释符要属于这门语言、前面是空白�
   assert.equal(trailing('a.ts', 'const A = base + " #see " + "P";'), false);
   assert.equal(trailing('a.ts', "const A = ' // P';"), false);
   assert.equal(trailing('a.ts', "f('x'); // don't 改，见 P"), true);
+  // // 和 /* 紧贴在语句结尾后面的也认；# 前面要是空白
+  assert.equal(trailing('a.ts', 'const A = 3;// 见 P'), true);
+  assert.equal(trailing('a.ts', 'fn(a)/* 见 P */'), true);
+  assert.equal(trailing('a.sh', 'echo a#见 P'), false);
+  assert.equal(trailing('a.vue', '<div><!-- 见 P --></div>'), true);
   assert.equal(trailing('a.sh', 'rsync -a --exclude P src/ dst/'), false);
   assert.equal(trailing('a.sh', 'run x # 见 P'), true);
   assert.equal(trailing('a.sql', 'select 1; -- 见 P'), true);
