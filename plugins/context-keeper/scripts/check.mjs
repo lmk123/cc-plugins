@@ -527,6 +527,13 @@ for (const f of claudeMds) {
   }
 }
 
+// CLAUDE.local.md 是只留本机的文件（不打算公开的业务方向、个人设置）。被忽略的不在 ls-files 里，出现在这里就是没被忽略
+if (IS_GIT) {
+  for (const f of claudeMds.filter((f) => /(^|\/)CLAUDE\.local\.md$/.test(f))) {
+    add('warn', 'local-not-ignored', f, 'CLAUDE.local.md 没被 .gitignore 忽略：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略），一提交就进了仓库。在 .gitignore 里加一行 `CLAUDE.local.md`；已经提交过的，还要 `git rm --cached`');
+  }
+}
+
 // ---------- 修剪候选：叙述形态 ----------
 // 带完整日期、状态词、叙述词的行，多半在讲发生过什么，不是一条结论。只标年月的观测日期（「2026-11 实测」）不算。
 // 机械匹配，只作候选。叙述词是别的词的一部分的常见情况排除掉（「当时间超过」「统一度量」「修改回调」「还原本地」

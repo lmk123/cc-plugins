@@ -277,6 +277,12 @@ test('CLAUDE.md 带原因的行报警告，指向旧版文档的行只报旧版�
   assert.deepEqual(of(r, 'legacy-pointer').map((f) => f.line), [4]);
 });
 
+test('没被 .gitignore 忽略的 CLAUDE.local.md 报警告，忽略了的不报', () => {
+  const local = { 'CLAUDE.local.md': '- 定价先看竞品\n', 'apps/web/CLAUDE.local.md': '- 定价先看竞品\n' };
+  assert.deepEqual(files(check(makeRepo({ ...CLEAN, ...local })), 'local-not-ignored'), ['CLAUDE.local.md', 'apps/web/CLAUDE.local.md']);
+  assert.deepEqual(of(check(makeRepo({ ...CLEAN, ...local, '.gitignore': 'CLAUDE.local.md\n' })), 'local-not-ignored'), []);
+});
+
 // ---------- 修剪候选 ----------
 
 test('叙述形态：完整日期、状态词、叙述词按文件汇总，年月观测日期、行内代码、CLAUDE.local.md 不算', () => {
