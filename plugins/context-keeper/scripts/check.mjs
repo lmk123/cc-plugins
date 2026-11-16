@@ -15,7 +15,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { analyzeComments, langFor, scanSource } from './lib/comments.mjs';
 import {
-  AGENT_MD_RE, CLAUDE_MD_RE, INDEX_RULE_RE, LEGACY_DOC_DIRS, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_MD_RE, SKILL_RE,
+  AGENT_MD_RE, CLAUDE_MD_RE, INDEX_RULE_RE, LEGACY_DOC_DIRS, LOCAL_MD_RE, MARKDOWN_RE, NOT_CODE_DIR_RE, RULE_RE, SKILL_MD_RE, SKILL_RE,
   proseLines, segmentIndex, segmentIndexes,
 } from './lib/markdown.mjs';
 
@@ -66,9 +66,9 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.n
 const THIRD_PARTY_DIRS = new Set(['node_modules', 'vendor']);
 const isThirdParty = (f) => f.split('/').some((s) => THIRD_PARTY_DIRS.has(s));
 
-// 已经进了 git 索引的文件（listFiles 顺带记下）：判断 CLAUDE.local.md 是没被忽略还是已经提交了
-const TRACKED = new Set();
+// files：仓库里的文件（不含被忽略的）；tracked：其中已经进了 git 索引的，用来判断 CLAUDE.local.md 是没被忽略还是已经提交了
 function listFiles() {
+  const tracked = new Set();
   if (IS_GIT) {
     // -t 给每个路径加状态前缀：`? ` 是未跟踪的，其余（H、S、M…）都在索引里
     const r = git(['ls-files', '-z', '-t', '--cached', '--others', '--exclude-standard']);
@@ -77,9 +77,9 @@ function listFiles() {
       if (e.length < 3) continue;
       const f = e.slice(2);
       all.add(f);
-      if (e[0] !== '?') TRACKED.add(f);
+      if (e[0] !== '?') tracked.add(f);
     }
-    return [...all].filter((f) => fs.existsSync(path.join(ROOT, f)));
+    return { files: [...all].filter((f) => fs.existsSync(path.join(ROOT, f))), tracked };
   }
   const out = [];
   const walk = (dir) => {
@@ -90,10 +90,11 @@ function listFiles() {
     }
   };
   walk('');
-  return out;
+  return { files: out, tracked };
 }
 
-const FILES = listFiles().sort();
+const { files: LISTED, tracked: TRACKED } = listFiles();
+const FILES = LISTED.sort();
 const FILE_SET = new Set(FILES);
 // 这个仓库自己的文件：所有检查都只看它们。FILES 只在算 rule 的 glob 匹配到哪些文件时用（rule 可以指向第三方目录里的文件）
 const OWN = FILES.filter((f) => !isThirdParty(f));
@@ -199,8 +200,16 @@ function legacyDirOf(f) {
 }
 
 const rules = OWN.filter((f) => RULE_RE.test(f) && !legacyDirOf(f));
-const claudeMds = OWN.filter((f) => CLAUDE_MD_RE.test(f) && !legacyDirOf(f));
-const isLocalMd = (f) => /(^|\/)CLAUDE\.local\.md$/.test(f);
+const isLocalMd = (f) => LOCAL_MD_RE.test(f);
+// 被 .gitignore 正确忽略的 CLAUDE.local.md 不在 FILES 里，单独列出来，否则体检时看不到里面只留本机的内容。
+// --directory：整个被忽略的目录（dist/、node_modules/、别的 worktree）只给出目录名、不往里走，里面的不算这份 checkout 的
+function ignoredLocalMds() {
+  if (!IS_GIT) return [];
+  const r = git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', '--', '*CLAUDE.local.md']);
+  return r.stdout.split('\0').filter((f) => isLocalMd(f) && !isThirdParty(f) && fs.existsSync(path.join(ROOT, f)));
+}
+const listedLocal = new Set(OWN.filter(isLocalMd));
+const claudeMds = [...OWN.filter((f) => CLAUDE_MD_RE.test(f)), ...ignoredLocalMds()].filter((f) => !legacyDirOf(f)).sort();
 const skills = OWN.filter((f) => SKILL_RE.test(f));
 const skillMds = OWN.filter((f) => SKILL_MD_RE.test(f));
 
@@ -541,10 +550,11 @@ for (const f of claudeMds) {
 }
 
 // CLAUDE.local.md 是只留本机的文件（不打算公开的业务方向、个人设置）。没被忽略的未跟踪文件和已经提交的文件都在 ls-files 里：
-// 已提交的再加 .gitignore 也没用，要分开提示
+// 已提交的再加 .gitignore 也没用，要分开提示。已提交的报错误：CI 的 checkout 里只看得到这一种，要能拦下 PR
 if (IS_GIT) {
-  for (const f of claudeMds.filter(isLocalMd)) {
-    add('warn', 'local-not-ignored', f, TRACKED.has(f)
+  for (const f of claudeMds.filter((x) => listedLocal.has(x))) {
+    const committed = TRACKED.has(f);
+    add(committed ? 'error' : 'warn', 'local-not-ignored', f, committed
       ? 'CLAUDE.local.md 已经提交进了仓库：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略）。`git rm --cached` 把它移出仓库（文件留在本机），.gitignore 里还没有 `CLAUDE.local.md` 的补上一行；git 历史里仍看得到，要不要改写历史由用户定'
       : 'CLAUDE.local.md 没被 .gitignore 忽略：它只该留在本机，里面常有不打算公开的内容（竞品、经营策略），一提交就进了仓库。在 .gitignore 里加一行 `CLAUDE.local.md`');
   }

@@ -5,6 +5,8 @@
 
 export const RULE_RE = /(^|\/)\.claude\/rules\/.+\.md$/;
 export const CLAUDE_MD_RE = /(^|\/)(\.claude\/)?CLAUDE(\.local)?\.md$/;
+// 只留本机的那份：不进仓库，要靠 .gitignore 挡住
+export const LOCAL_MD_RE = /(^|\/)CLAUDE\.local\.md$/;
 export const SKILL_RE = /(^|\/)\.claude\/skills\/[^/]+\/SKILL\.md$/;
 // skill 目录下的 Markdown（SKILL.md 和它的参考文件）：用到 skill 时才读，同样只该写结论
 export const SKILL_MD_RE = /(^|\/)\.claude\/skills\/.+\.(md|mdx|markdown)$/i;
