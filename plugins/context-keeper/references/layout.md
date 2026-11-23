@@ -1,6 +1,6 @@
 # context-keeper 规范
 
-`organize-context` 和 `record-context` 共用这份规范。
+`record-context` 和 `/context-keeper:organize-context`（只能由用户手动输入调用）共用这份规范。
 
 目标：**只记 Claude 不知道就会做错的事，写在它用得上时一定会看到的地方，越短越好。**
 
@@ -184,7 +184,7 @@
 
 ## 旧版的项目文档
 
-0.9.x 及更早的插件会建项目文档目录 `context-docs/`（更早叫 `.context/`），在注释、rule、CLAUDE.md 里留「重点 + 什么时候读 + 路径」的指针，并用领域索引 rule（`.claude/rules/<领域>/context-index.md`）和文档入口（`context-docs/README.md`）登记文档。0.10.0 起不再有这些东西，整理时按下面处理（具体步骤见 organize-context）：
+0.9.x 及更早的插件会建项目文档目录 `context-docs/`（更早叫 `.context/`），在注释、rule、CLAUDE.md 里留「重点 + 什么时候读 + 路径」的指针，并用领域索引 rule（`.claude/rules/<领域>/context-index.md`）和文档入口（`context-docs/README.md`）登记文档。0.10.0 起不再有这些东西，整理时按下面处理（具体步骤在 `/context-keeper:organize-context` 里，只能由用户输入调用；其他时候碰到这些不自己迁移，提醒用户跑它）：
 
 - **指针**：原处的「重点」就是结论，留下；「什么时候读 + 路径」删掉。重点本身是经过或状态的（「2026-10 起改成 X」「尚未部署」），按准入门槛重过，改写成结论或删掉。指到的文档已经不在了的指针同样处理。
 - **文档**：每份读一遍，找出其中过得了门槛、而原处的重点里还没有的结论，按判据阶梯放到原处或别处；其余（经过、状态、实测流水、表格）不迁移。然后删掉文档。文档全文留在 git 历史里，`git log --all -- <文档路径>` 找得回来。被代码字符串（日志、报错提示、测试数据）提到的文档，删之前先由用户改掉那些字符串：改它们要动可执行代码。
