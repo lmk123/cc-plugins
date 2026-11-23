@@ -53,6 +53,7 @@ claude plugin marketplace update lmk123
 | 插件 | 说明 |
 | --- | --- |
 | [context-keeper](plugins/context-keeper) | 只把 Claude 不知道就会做错的结论记进项目：单个文件的写成紧贴代码的短注释，多个文件共用的写成 rule，流程写成 skill，硬约束才进 CLAUDE.md；经过、历史、实测流水留给 commit 和 PR；兼容 monorepo 与单仓库 |
+| [mine](plugins/mine) | 只能由用户用斜杠命令主动调用的 skill 合集，Claude 不会自行触发 |
 
 ## 目录结构
 

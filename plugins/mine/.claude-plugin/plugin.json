@@ -1,0 +1,17 @@
+{
+  "name": "mine",
+  "version": "0.1.0",
+  "description": "只能由用户用斜杠命令主动调用的 skill 合集，Claude 不会自行触发",
+  "author": {
+    "name": "lmk123",
+    "url": "https://github.com/lmk123"
+  },
+  "repository": "https://github.com/lmk123/cc-plugins",
+  "license": "MIT",
+  "keywords": [
+    "slash-commands",
+    "skills",
+    "git",
+    "pull-request"
+  ]
+}
