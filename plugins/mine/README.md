@@ -4,8 +4,11 @@
 
 ## 安装
 
+先添加市场（已添加过可跳过），再安装：
+
 ```
-/plugin install mine --marketplace lmk123/cc-plugins
+/plugin marketplace add lmk123/cc-plugins
+/plugin install mine@lmk123
 ```
 
 ## Skills
