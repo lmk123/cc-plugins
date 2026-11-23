@@ -75,7 +75,7 @@ monorepo 中，只涉及一个包的内容放进该包自己的 `CLAUDE.md`、`.
 
 **整理与体检**
 
-- `organize-context`：把现有项目整理成这套结构，已经在用的项目则做体检，默认以删减为目标。也会把旧版插件留下的 `context-docs/` 迁走：过得了门槛的结论放回原处，其余随文档一起删掉。始终在 plan mode 里出计划（不在会先进入），批准后才动文件。也能把自动记忆里与环境无关的内容沉淀进项目。
+- `/context-keeper:organize-context`：只能由你手动输入调用，Claude 不会自行触发。把现有项目整理成这套结构，已经在用的项目则做体检，默认以删减为目标。也会把旧版插件留下的 `context-docs/` 迁走：过得了门槛的结论放回原处，其余随文档一起删掉。始终在 plan mode 里出计划（不在会先进入），批准后才动文件。也能把自动记忆里与环境无关的内容沉淀进项目。
 - `scripts/check.mjs`：确定性检查，skill 会自动调用，也可以手动跑：
 
   ```bash
@@ -119,6 +119,6 @@ const MAX_RETRY = 3;
 - 检查脚本：去掉文档、指针、入口相关的检查；新增「旧版文档目录」「旧版指针」和修剪候选「叙述形态」
 - hook：删掉 pointer-guard 和 doc hook，只留 comment hook
 
-升级后跑一次 `organize-context`，它会按领域列出迁移计划，批准后执行。删掉的文档留在 git 历史里，`git log --all -- <文档路径>` 找得回来。
+升级后跑一次 `/context-keeper:organize-context`，它会按领域列出迁移计划，批准后执行。删掉的文档留在 git 历史里，`git log --all -- <文档路径>` 找得回来。
 
 完整规范见 [references/layout.md](references/layout.md)，模板见 [references/templates.md](references/templates.md)。
