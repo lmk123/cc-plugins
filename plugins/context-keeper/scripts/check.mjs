@@ -399,7 +399,7 @@ for (const rule of rules) {
   const bodyLines = body.filter((l) => l.trim()).length;
   ruleBodyLines.set(rule, bodyLines);
   if (INDEX_RULE_RE.test(rule)) {
-    add('warn', 'legacy', rule, '旧版领域索引 rule：0.10.0 起不再有项目文档，也不再登记文档。每一行的重点按准入门槛重过，过了的放到该放的地方（窄 rule、某处注释或包级 CLAUDE.md），然后删掉这条 rule（跑 organize-context）');
+    add('warn', 'legacy', rule, '旧版领域索引 rule：0.10.0 起不再有项目文档，也不再登记文档。每一行的重点按准入门槛重过，过了的放到该放的地方（窄 rule、某处注释或包级 CLAUDE.md），然后删掉这条 rule（跑 /context-keeper:organize-context）');
     continue;
   }
   if (bodyLines > RULE_MAX_LINES) {
@@ -641,7 +641,7 @@ for (const dir of [...legacyDocs.keys(), ...ignoredLegacyDirs]) {
   scopes.add(dir.slice(0, dir.slice(0, -1).lastIndexOf('/') + 1));
 }
 for (const [dir, list] of legacyDocs) {
-  addDir('warn', 'legacy', dir, `旧版文档目录（${list.length} 份文档）：0.10.0 起不再有项目文档。每份文档里过得了准入门槛、原处还没有的结论放回原处，其余随文档删掉，指针只留重点（跑 organize-context，文档多的按领域分批）`);
+  addDir('warn', 'legacy', dir, `旧版文档目录（${list.length} 份文档）：0.10.0 起不再有项目文档。每份文档里过得了准入门槛、原处还没有的结论放回原处，其余随文档删掉，指针只留重点（跑 /context-keeper:organize-context，文档多的按领域分批）`);
 }
 for (const dir of ignoredLegacyDirs) {
   if (legacyDocs.has(dir)) continue;
